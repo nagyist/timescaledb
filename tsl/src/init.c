@@ -132,6 +132,7 @@ CrossModuleFunctions tsl_cm_functions = {
 
 	.policies_add = policies_add,
 	.policies_remove = policies_remove,
+	.policies_remove_all = policies_remove_all,
 	.policies_alter = policies_alter,
 	.policies_show = policies_show,
 
