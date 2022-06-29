@@ -12,7 +12,33 @@ accidentally triggering the load of a previous DB version.**
 * #4397 Support intervals with month component when constifying now()
 
 **Thanks**
-@nikugogoi for reporting a bug with CTEs and upserts on distributed hypertables
+* @nikugogoi for reporting a bug with CTEs and upserts on distributed hypertables
+
+
+## 2.7.1 (2022-07-01)
+
+This release is patch release. We recommend that you upgrade at the
+next available opportunity.
+
+**Bugfixes**
+* #4244 Function telemetry
+* #4287 Add internal api for foreign table chunk
+* #4367 Improved buffer management in the copy operator
+* #4375 Don't ask for orderby column if default already set
+* #4400 Use our implementation of `find_em_expr_for_rel` for PG15+
+* #4408 Fix crash during insert into distributed hypertable
+* #4411 Add `shmem_request_hook`
+* #4436 Fix various misspellings
+* #4437 Fix segfault in subscription_exec
+* #4442 Fix perms in copy/move chunk
+* #4450 Retain hypertable ownership on `attach_data_node`
+* #4451 Repair numeric partial state on the fly
+* #4463 Fix empty bytea handlng with distributed tables
+* #4464 Add api to associate a hypertable with custom jobs
+* #4469 Better superuser handling for move_chunk
+
+**Thanks**
+* @xin-hedera Finding bug in empty bytea values for distributed tables
 
 ## 2.7.0 (2022-05-24)
 
