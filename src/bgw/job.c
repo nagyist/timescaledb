@@ -4,51 +4,52 @@
  * LICENSE-APACHE for a copy of the license.
  */
 #include <postgres.h>
-#include <miscadmin.h>
-#include <pgstat.h>
+
+#include <unistd.h>
 #include <access/xact.h>
 #include <catalog/pg_authid.h>
+#include <executor/execdebug.h>
+#include <executor/instrument.h>
+#include <miscadmin.h>
 #include <nodes/makefuncs.h>
 #include <parser/parse_func.h>
 #include <parser/parser.h>
+#include <pgstat.h>
 #include <postmaster/bgworker.h>
 #include <storage/ipc.h>
-#include <tcop/tcopprot.h>
-#include <utils/builtins.h>
-#include <utils/memutils.h>
-#include <utils/syscache.h>
-#include <utils/timestamp.h>
 #include <storage/lock.h>
 #include <storage/proc.h>
 #include <storage/procarray.h>
 #include <storage/sinvaladt.h>
+#include <tcop/tcopprot.h>
 #include <utils/acl.h>
+#include <utils/builtins.h>
 #include <utils/elog.h>
-#include <executor/execdebug.h>
-#include <executor/instrument.h>
 #include <utils/jsonb.h>
+#include <utils/memutils.h>
 #include <utils/snapmgr.h>
-#include <unistd.h>
+#include <utils/syscache.h>
+#include <utils/timestamp.h>
 
-#include "job.h"
-#include "config.h"
-#include "scanner.h"
-#include "extension.h"
 #include "compat/compat.h"
+#include "bgw/scheduler.h"
+#include "bgw_policy/chunk_stats.h"
+#include "bgw_policy/policy.h"
+#include "config.h"
+#include "cross_module_fn.h"
+#include "debug_assert.h"
+#include "extension.h"
+#include "job.h"
 #include "job_stat.h"
+#include "jsonb_utils.h"
 #include "license_guc.h"
+#include "scan_iterator.h"
+#include "scanner.h"
 #include "utils.h"
+
 #ifdef USE_TELEMETRY
 #include "telemetry/telemetry.h"
 #endif
-#include "bgw_policy/chunk_stats.h"
-#include "bgw_policy/policy.h"
-#include "scan_iterator.h"
-#include "bgw/scheduler.h"
-
-#include <cross_module_fn.h>
-#include "jsonb_utils.h"
-#include "debug_assert.h"
 
 static scheduler_test_hook_type scheduler_test_hook = NULL;
 static char *job_entrypoint_function_name = "ts_bgw_job_entrypoint";
@@ -404,13 +405,19 @@ ts_bgw_job_get_scheduled(size_t alloc_size, MemoryContext mctx)
 		 * would have to be freed separately when freeing a job. */
 		job->fd.config = NULL;
 
+		old_ctx = MemoryContextSwitchTo(mctx);
+
 		timezone = slot_getattr(ti->slot, Anum_bgw_job_timezone, &timezone_isnull);
 		if (!timezone_isnull)
-			job->fd.timezone = DatumGetTextPP(timezone);
+		{
+			/* We use DatumGetTextPCopy to move the detoasted value into our memory context */
+			job->fd.timezone = DatumGetTextPCopy(timezone);
+		}
 		else
+		{
 			job->fd.timezone = NULL;
+		}
 
-		old_ctx = MemoryContextSwitchTo(mctx);
 		jobs = lappend(jobs, job);
 		MemoryContextSwitchTo(old_ctx);
 	}
@@ -493,33 +500,6 @@ ts_bgw_job_find_by_proc_and_hypertable_id(const char *proc_name, const char *pro
 	init_scan_by_proc_schema(&scankey[0], proc_schema);
 	init_scan_by_proc_name(&scankey[1], proc_name);
 	init_scan_by_hypertable_id(&scankey[2], hypertable_id);
-
-	ts_scanner_scan(&scanctx);
-	return list_data.list;
-}
-
-List *
-ts_bgw_job_find_by_proc(const char *proc_name, const char *proc_schema)
-{
-	Catalog *catalog = ts_catalog_get();
-	ScanKeyData scankey[2];
-	AccumData list_data = {
-		.list = NIL,
-		.alloc_size = sizeof(BgwJob),
-	};
-	ScannerCtx scanctx = {
-		.table = catalog_get_table_id(catalog, BGW_JOB),
-		.index = catalog_get_index(ts_catalog_get(), BGW_JOB, BGW_JOB_PROC_HYPERTABLE_ID_IDX),
-		.data = &list_data,
-		.scankey = scankey,
-		.nkeys = sizeof(scankey) / sizeof(*scankey),
-		.tuple_found = bgw_job_accum_tuple_found,
-		.lockmode = AccessShareLock,
-		.scandirection = ForwardScanDirection,
-	};
-
-	init_scan_by_proc_schema(&scankey[0], proc_schema);
-	init_scan_by_proc_name(&scankey[1], proc_name);
 
 	ts_scanner_scan(&scanctx);
 	return list_data.list;
@@ -908,7 +888,7 @@ bgw_job_tuple_update_by_id(TupleInfo *ti, void *const data)
 	else
 		isnull[AttrNumberGetAttrOffset(Anum_bgw_job_config)] = true;
 
-	if (updated_job->fd.hypertable_id != 0)
+	if (updated_job->fd.hypertable_id != INVALID_HYPERTABLE_ID)
 	{
 		values[AttrNumberGetAttrOffset(Anum_bgw_job_hypertable_id)] =
 			Int32GetDatum(updated_job->fd.hypertable_id);
@@ -1138,7 +1118,7 @@ ts_bgw_job_entrypoint(PG_FUNCTION_ARGS)
 	instr_time duration;
 
 	memcpy(&params, MyBgworkerEntry->bgw_extra, sizeof(BgwParams));
-	Ensure(params.user_oid != 0 && params.job_id != 0,
+	Ensure(OidIsValid(params.user_oid) && params.job_id != 0,
 		   "job id or user oid was zero - job_id: %d, user_oid: %d",
 		   params.job_id,
 		   params.user_oid);

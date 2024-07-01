@@ -25,8 +25,8 @@ SHOW timescaledb.enable_job_execution_logging;
 SELECT _timescaledb_functions.start_background_workers();
 SELECT pg_sleep(6);
 
-SELECT add_job('custom_job_ok', '1h', initial_start := now()) AS job_id_1 \gset
-SELECT add_job('custom_job_error', '1h', initial_start := now()) AS job_id_2 \gset
+SELECT add_job('custom_job_ok', schedule_interval => interval '1 hour', initial_start := now()) AS job_id_1 \gset
+SELECT add_job('custom_job_error', schedule_interval => interval '1 hour', initial_start := now()) AS job_id_2 \gset
 
 SELECT test.wait_for_job_to_run(:job_id_1, 1);
 SELECT test.wait_for_job_to_run(:job_id_2, 1);
@@ -34,8 +34,6 @@ SELECT test.wait_for_job_to_run(:job_id_2, 1);
 -- only 1 failure
 SELECT count(*), succeeded FROM timescaledb_information.job_history WHERE job_id >= 1000 GROUP BY 2 ORDER BY 2;
 SELECT proc_schema, proc_name, sqlerrcode, err_message FROM timescaledb_information.job_history WHERE job_id >= 1000 AND succeeded IS FALSE;
-
-SELECT _timescaledb_functions.stop_background_workers();
 
 -- Check current jobs status
 SELECT job_id, job_status, total_runs, total_successes, total_failures
@@ -46,10 +44,6 @@ ORDER BY job_id;
 -- Log all executions
 ALTER SYSTEM SET timescaledb.enable_job_execution_logging TO ON;
 SELECT pg_reload_conf();
-
-\c :TEST_DBNAME :ROLE_SUPERUSER
-SELECT _timescaledb_functions.start_background_workers();
-SELECT pg_sleep(6);
 
 SELECT scheduled FROM alter_job(:job_id_1, next_start => now());
 SELECT scheduled FROM alter_job(:job_id_2, next_start => now());
@@ -77,10 +71,10 @@ SELECT test.wait_for_job_to_run(:job_id_1, 3);
 SELECT test.wait_for_job_to_run(:job_id_2, 3);
 
 -- Check job execution history
-SELECT proc_schema, proc_name, succeeded, config, sqlerrcode, err_message
+SELECT job_id, pid IS NOT NULL AS pid, proc_schema, proc_name, succeeded, config, sqlerrcode, err_message
 FROM timescaledb_information.job_history
 WHERE job_id >= 1000
-ORDER BY id;
+ORDER BY id, job_id;
 
 -- Changing the config of one job
 SELECT scheduled FROM alter_job(:job_id_1, config => '{"foo": 2, "bar": 1}'::jsonb);
@@ -88,7 +82,7 @@ SELECT scheduled FROM alter_job(:job_id_1, next_start => now());
 SELECT test.wait_for_job_to_run(:job_id_1, 4);
 
 -- Check job execution history
-SELECT proc_schema, proc_name, succeeded, config, sqlerrcode, err_message
+SELECT job_id, pid IS NOT NULL AS pid, proc_schema, proc_name, succeeded, config, sqlerrcode, err_message
 FROM timescaledb_information.job_history
 WHERE job_id = :job_id_1
 ORDER BY id;
@@ -107,7 +101,7 @@ SELECT scheduled FROM alter_job(:job_id_1, next_start => now());
 SELECT test.wait_for_job_to_run(:job_id_1, 5);
 
 -- Check job execution history
-SELECT proc_schema, proc_name, succeeded, config, sqlerrcode, err_message
+SELECT job_id, pid IS NOT NULL AS pid, proc_schema, proc_name, succeeded, config, sqlerrcode, err_message
 FROM timescaledb_information.job_history
 WHERE job_id = :job_id_1
 ORDER BY id;
@@ -129,13 +123,35 @@ SELECT scheduled FROM alter_job(:job_id_1, next_start => now());
 SELECT test.wait_for_job_to_run(:job_id_1, 6);
 
 -- Check job execution history
-SELECT proc_schema, proc_name, succeeded, config, sqlerrcode, err_message
+SELECT job_id, pid IS NOT NULL AS pid, proc_schema, proc_name, succeeded, config, sqlerrcode, err_message
 FROM timescaledb_information.job_history
 WHERE job_id = :job_id_1
 ORDER BY id;
 
+-- Alter other information about the job
+CREATE PROCEDURE custom_job_alter(job_id int, config jsonb) LANGUAGE PLPGSQL AS
+$$
+BEGIN
+  RAISE LOG 'custom_job_alter';
+END
+$$;
+
+SELECT add_job('custom_job_alter', schedule_interval => interval '1 hour', initial_start := now()) AS job_id_3 \gset
+SELECT test.wait_for_job_to_run(:job_id_3, 1);
+
+SELECT timezone, fixed_schedule, config, schedule_interval
+FROM alter_job(:job_id_3, timezone => 'America/Sao_Paulo', fixed_schedule => false, config => '{"key": "value"}'::jsonb, schedule_interval => interval '10 min', next_start => now());
+SELECT test.wait_for_job_to_run(:job_id_3, 2);
+
+-- Should return two executions, the second will show the changed values
+SELECT job_id, succeeded, data->'job'->>'timezone' AS timezone, data->'job'->>'fixed_schedule' AS fixed_schedule, data->'job'->>'schedule_interval' AS schedule_interval, data->'job'->'config' AS config
+FROM _timescaledb_internal.bgw_job_stat_history
+WHERE job_id = :job_id_3
+ORDER BY id;
+
 SELECT delete_job(:job_id_1);
 SELECT delete_job(:job_id_2);
+SELECT delete_job(:job_id_3);
 
 ALTER SYSTEM RESET timescaledb.enable_job_execution_logging;
 SELECT pg_reload_conf();

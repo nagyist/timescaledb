@@ -8,8 +8,8 @@
 #include <catalog/pg_type.h>
 #include <common/base64.h>
 #include <funcapi.h>
-#include <libpq/pqformat.h>
 #include <lib/stringinfo.h>
+#include <libpq/pqformat.h>
 #include <port/pg_bitutils.h>
 #include <utils/builtins.h>
 #include <utils/memutils.h>
@@ -867,7 +867,7 @@ unpack_leading_zeros_array(BitArray *bitarray, uint32 *_n)
 	for (uint32 lane = 0; lane < n_lanes; lane++)
 	{
 		uint8 *restrict lane_dest = &dest[lane * LANE_OUTPUTS];
-		const uint8 *restrict lane_src = &((uint8 *) bitarray->buckets.data)[lane * LANE_INPUTS];
+		const uint8 *lane_src = &((uint8 *) bitarray->buckets.data)[lane * LANE_INPUTS];
 		for (uint32 output_in_lane = 0; output_in_lane < LANE_OUTPUTS; output_in_lane++)
 		{
 			const int startbit_abs = output_in_lane * BITS_PER_LEADING_ZEROS;

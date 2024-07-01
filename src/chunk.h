@@ -8,14 +8,13 @@
 #include <postgres.h>
 #include <access/htup.h>
 #include <access/tupdesc.h>
-#include <utils/hsearch.h>
 #include <foreign/foreign.h>
+#include <utils/hsearch.h>
 
-#include "export.h"
-#include "ts_catalog/catalog.h"
 #include "chunk_constraint.h"
-#include "hypertable.h"
 #include "export.h"
+#include "hypertable.h"
+#include "ts_catalog/catalog.h"
 
 #define INVALID_CHUNK_ID 0
 #define IS_OSM_CHUNK(chunk) ((chunk)->fd.osm_chunk == true)
@@ -177,18 +176,14 @@ extern TSDLLEXPORT Chunk *ts_chunk_get_by_relid(Oid relid, bool fail_if_not_foun
 extern TSDLLEXPORT void ts_chunk_free(Chunk *chunk);
 extern bool ts_chunk_exists(const char *schema_name, const char *table_name);
 extern TSDLLEXPORT int32 ts_chunk_get_hypertable_id_by_reloid(Oid reloid);
-extern TSDLLEXPORT int32 ts_chunk_get_compressed_chunk_id(int32 chunk_id);
 extern TSDLLEXPORT FormData_chunk ts_chunk_get_formdata(int32 chunk_id);
 extern TSDLLEXPORT Oid ts_chunk_get_relid(int32 chunk_id, bool missing_ok);
 extern Oid ts_chunk_get_schema_id(int32 chunk_id, bool missing_ok);
 extern bool ts_chunk_get_id(const char *schema, const char *table, int32 *chunk_id,
 							bool missing_ok);
 extern bool ts_chunk_exists_relid(Oid relid);
-extern TSDLLEXPORT int ts_chunk_num_of_chunks_created_after(const Chunk *chunk);
 extern TSDLLEXPORT bool ts_chunk_exists_with_compression(int32 hypertable_id);
 extern void ts_chunk_recreate_all_constraints_for_dimension(Hypertable *ht, int32 dimension_id);
-extern TSDLLEXPORT void ts_chunk_drop_fks(const Chunk *const chunk);
-extern TSDLLEXPORT void ts_chunk_create_fks(const Hypertable *ht, const Chunk *const chunk);
 extern int ts_chunk_delete_by_hypertable_id(int32 hypertable_id);
 extern int ts_chunk_delete_by_name(const char *schema, const char *table, DropBehavior behavior);
 extern bool ts_chunk_set_name(Chunk *chunk, const char *newname);
@@ -241,7 +236,6 @@ extern Chunk *ts_chunk_build_from_tuple_and_stub(Chunk **chunkptr, TupleInfo *ti
 extern ScanIterator ts_chunk_scan_iterator_create(MemoryContext result_mcxt);
 extern void ts_chunk_scan_iterator_set_chunk_id(ScanIterator *it, int32 chunk_id);
 extern bool ts_chunk_lock_if_exists(Oid chunk_oid, LOCKMODE chunk_lockmode);
-extern int ts_chunk_oid_cmp(const void *p1, const void *p2);
 int ts_chunk_get_osm_chunk_id(int hypertable_id);
 extern TSDLLEXPORT void ts_chunk_merge_on_dimension(const Hypertable *ht, Chunk *chunk,
 													const Chunk *merge_chunk, int32 dimension_id);

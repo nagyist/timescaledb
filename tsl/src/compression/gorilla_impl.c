@@ -40,19 +40,19 @@ FUNCTION_NAME(gorilla_decompress_all, ELEMENT_TYPE)(CompressedGorillaData *goril
 	CheckCompressedData(n_total >= n_notnull);
 
 	/* Unpack the basic compressed data parts. */
-	Simple8bRleBitmap tag0s = simple8brle_bitmap_prefixsums(gorilla_data->tag0s);
-	Simple8bRleBitmap tag1s = simple8brle_bitmap_prefixsums(gorilla_data->tag1s);
+	const Simple8bRleBitmap tag0s = simple8brle_bitmap_prefixsums(gorilla_data->tag0s);
+	const Simple8bRleBitmap tag1s = simple8brle_bitmap_prefixsums(gorilla_data->tag1s);
 
 	BitArray leading_zeros_bitarray = gorilla_data->leading_zeros;
 	BitArrayIterator leading_zeros_iterator;
 	bit_array_iterator_init(&leading_zeros_iterator, &leading_zeros_bitarray);
 
 	uint32 num_leading_zeros_padded;
-	uint8 *restrict all_leading_zeros =
+	const uint8 *all_leading_zeros =
 		unpack_leading_zeros_array(&gorilla_data->leading_zeros, &num_leading_zeros_padded);
 
 	uint32 num_bit_widths;
-	uint8 *restrict bit_widths =
+	const uint8 *bit_widths =
 		simple8brle_decompress_all_uint8(gorilla_data->num_bits_used_per_xor, &num_bit_widths);
 
 	BitArray xors_bitarray = gorilla_data->xors;
@@ -136,10 +136,18 @@ FUNCTION_NAME(gorilla_decompress_all, ELEMENT_TYPE)(CompressedGorillaData *goril
 	uint64 *restrict validity_bitmap = MemoryContextAlloc(dest_mctx, validity_bitmap_bytes);
 
 	/*
-	 * For starters, set the validity bitmap to all ones. We probably have less
-	 * nulls than values, so this is faster.
+	 * First, mark all data as valid, we will fill the nulls later if needed.
+	 * Note that the validity bitmap size is a multiple of 64 bits. We have to
+	 * fill the tail bits with zeros, because the corresponding elements are not
+	 * valid.
+	 *
 	 */
 	memset(validity_bitmap, 0xFF, validity_bitmap_bytes);
+	if (n_total % 64)
+	{
+		const uint64 tail_mask = -1ULL >> (64 - n_total % 64);
+		validity_bitmap[n_total / 64] &= tail_mask;
+	}
 
 	if (has_nulls)
 	{
@@ -147,7 +155,7 @@ FUNCTION_NAME(gorilla_decompress_all, ELEMENT_TYPE)(CompressedGorillaData *goril
 		 * We have decompressed the data with nulls skipped, reshuffle it
 		 * according to the nulls bitmap.
 		 */
-		Simple8bRleBitmap nulls = simple8brle_bitmap_decompress(gorilla_data->nulls);
+		const Simple8bRleBitmap nulls = simple8brle_bitmap_decompress(gorilla_data->nulls);
 		CheckCompressedData(n_notnull + simple8brle_bitmap_num_ones(&nulls) == n_total);
 
 		int current_notnull_element = n_notnull - 1;
@@ -168,26 +176,6 @@ FUNCTION_NAME(gorilla_decompress_all, ELEMENT_TYPE)(CompressedGorillaData *goril
 		}
 
 		Assert(current_notnull_element == -1);
-	}
-	else
-	{
-		/*
-		 * The validity bitmap size is a multiple of 64 bits. Fill the tail bits
-		 * with zeros, because the corresponding elements are not valid.
-		 */
-		if (n_total % 64)
-		{
-			const uint64 tail_mask = -1ULL >> (64 - n_total % 64);
-			validity_bitmap[n_total / 64] &= tail_mask;
-
-#ifdef USE_ASSERT_CHECKING
-			for (uint32 i = 0; i < 64; i++)
-			{
-				Assert(arrow_row_is_valid(validity_bitmap, (n_total / 64) * 64 + i) ==
-					   (i < n_total % 64));
-			}
-#endif
-		}
 	}
 
 	/* Return the result. */

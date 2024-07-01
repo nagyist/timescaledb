@@ -4,17 +4,17 @@
  * LICENSE-APACHE for a copy of the license.
  */
 #include <postgres.h>
-#include <utils/guc.h>
-#include <utils/varlena.h>
-#include <utils/regproc.h>
-#include <parser/parse_func.h>
 #include <miscadmin.h>
+#include <parser/parse_func.h>
+#include <utils/guc.h>
+#include <utils/regproc.h>
+#include <utils/varlena.h>
 
-#include "guc.h"
-#include "extension.h"
-#include "license_guc.h"
 #include "config.h"
+#include "extension.h"
+#include "guc.h"
 #include "hypertable_cache.h"
+#include "license_guc.h"
 #ifdef USE_TELEMETRY
 #include "telemetry/telemetry.h"
 #endif
@@ -71,7 +71,7 @@ bool ts_guc_enable_osm_reads = true;
 TSDLLEXPORT bool ts_guc_enable_dml_decompression = true;
 TSDLLEXPORT int ts_guc_max_tuples_decompressed_per_dml = 100000;
 TSDLLEXPORT bool ts_guc_enable_transparent_decompression = true;
-TSDLLEXPORT bool ts_guc_enable_decompression_logrep_markers = false;
+TSDLLEXPORT bool ts_guc_enable_compression_wal_markers = false;
 TSDLLEXPORT bool ts_guc_enable_decompression_sorted_merge = true;
 bool ts_guc_enable_chunkwise_aggregation = true;
 bool ts_guc_enable_vectorized_aggregation = true;
@@ -83,6 +83,8 @@ TSDLLEXPORT bool ts_guc_enable_skip_scan = true;
 static char *ts_guc_default_segmentby_fn = NULL;
 static char *ts_guc_default_orderby_fn = NULL;
 TSDLLEXPORT bool ts_guc_enable_job_execution_logging = false;
+bool ts_guc_enable_tss_callbacks = true;
+
 /* default value of ts_guc_max_open_chunks_per_insert and ts_guc_max_cached_chunks_per_hypertable
  * will be set as their respective boot-value when the GUC mechanism starts up */
 int ts_guc_max_open_chunks_per_insert;
@@ -97,6 +99,7 @@ char *ts_last_tune_time = NULL;
 char *ts_last_tune_version = NULL;
 
 bool ts_guc_debug_require_batch_sorted_merge = false;
+bool ts_guc_debug_allow_cagg_with_deprecated_funcs = false;
 
 #ifdef TS_DEBUG
 bool ts_shutdown_bgw = false;
@@ -175,8 +178,8 @@ ts_feature_flag_check(FeatureFlagType type)
 		return;
 	ereport(ERROR,
 			(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-			 errmsg("this feature is disabled"),
-			 errdetail("Feature flag \"%s\" is off", flag->name)));
+			 errmsg("You are using a Dynamic PostgreSQL service. This feature is only available on "
+					"Time-series services. https://tsdb.co/dynamic-postgresql")));
 }
 
 /*
@@ -473,13 +476,12 @@ _guc_init(void)
 							 NULL,
 							 NULL);
 
-	DefineCustomBoolVariable(MAKE_EXTOPTION("enable_decompression_logrep_markers"),
-							 "Enable logical replication markers for decompression ops",
-							 "Enable the generation of logical replication markers in the "
-							 "WAL stream to mark the start and end of decompressions (for insert, "
-							 "update, and delete operations)",
-							 &ts_guc_enable_decompression_logrep_markers,
-							 false,
+	DefineCustomBoolVariable(MAKE_EXTOPTION("enable_compression_wal_markers"),
+							 "Enable WAL markers for compression ops",
+							 "Enable the generation of markers in the WAL stream which mark the "
+							 "start and end of compression operations",
+							 &ts_guc_enable_compression_wal_markers,
+							 true,
 							 PGC_SIGHUP,
 							 0,
 							 NULL,
@@ -659,6 +661,17 @@ _guc_init(void)
 							 NULL,
 							 NULL);
 
+	DefineCustomBoolVariable(MAKE_EXTOPTION("enable_tss_callbacks"),
+							 "Enable ts_stat_statements callbacks",
+							 "Enable ts_stat_statements callbacks",
+							 &ts_guc_enable_tss_callbacks,
+							 true,
+							 PGC_SUSET,
+							 0,
+							 NULL,
+							 NULL,
+							 NULL);
+
 #ifdef USE_TELEMETRY
 	DefineCustomEnumVariable(MAKE_EXTOPTION("telemetry_level"),
 							 "Telemetry settings level",
@@ -828,6 +841,17 @@ _guc_init(void)
 							 /* short_desc= */ "require batch sorted merge in DecompressChunk node",
 							 /* long_desc= */ "this is for debugging purposes",
 							 /* valueAddr= */ &ts_guc_debug_require_batch_sorted_merge,
+							 /* bootValue= */ false,
+							 /* context= */ PGC_USERSET,
+							 /* flags= */ 0,
+							 /* check_hook= */ NULL,
+							 /* assign_hook= */ NULL,
+							 /* show_hook= */ NULL);
+
+	DefineCustomBoolVariable(/* name= */ MAKE_EXTOPTION("debug_allow_cagg_with_deprecated_funcs"),
+							 /* short_desc= */ "allow new caggs using time_bucket_ng",
+							 /* long_desc= */ "this is for debugging/testing purposes",
+							 /* valueAddr= */ &ts_guc_debug_allow_cagg_with_deprecated_funcs,
 							 /* bootValue= */ false,
 							 /* context= */ PGC_USERSET,
 							 /* flags= */ 0,

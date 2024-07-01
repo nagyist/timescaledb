@@ -1054,9 +1054,10 @@ SELECT constraint_schema, constraint_name, table_schema, table_name, constraint_
 FROM information_schema.table_constraints
 WHERE table_name = :'CHUNK_NAME' AND constraint_type = 'FOREIGN KEY'
 ORDER BY constraint_name;
- constraint_schema | constraint_name | table_schema | table_name | constraint_type 
--------------------+-----------------+--------------+------------+-----------------
-(0 rows)
+   constraint_schema   |      constraint_name      |     table_schema      |     table_name     | constraint_type 
+-----------------------+---------------------------+-----------------------+--------------------+-----------------
+ _timescaledb_internal | 42_6_hyper_device_id_fkey | _timescaledb_internal | _hyper_18_42_chunk | FOREIGN KEY
+(1 row)
 
 -- Delete data from compressed chunk directly fails
 \set ON_ERROR_STOP 0
@@ -1094,7 +1095,7 @@ WHERE table_name = :'CHUNK_NAME' AND constraint_type = 'FOREIGN KEY'
 ORDER BY constraint_name;
    constraint_schema   |      constraint_name      |     table_schema      |     table_name     | constraint_type 
 -----------------------+---------------------------+-----------------------+--------------------+-----------------
- _timescaledb_internal | 42_8_hyper_device_id_fkey | _timescaledb_internal | _hyper_18_42_chunk | FOREIGN KEY
+ _timescaledb_internal | 42_6_hyper_device_id_fkey | _timescaledb_internal | _hyper_18_42_chunk | FOREIGN KEY
 (1 row)
 
 -- create hypertable with 2 chunks
@@ -2846,3 +2847,31 @@ COPY compressed_table (time,a,b,c) FROM stdin;
 ERROR:  tuple decompression limit exceeded by operation
 \set ON_ERROR_STOP 1
 RESET timescaledb.max_tuples_decompressed_per_dml_transaction;
+-- Test decompression with DML which compares int8 to int4
+CREATE TABLE hyper_84 (time timestamptz, device int8, location int8, temp float8);
+SELECT create_hypertable('hyper_84', 'time', create_default_indexes => false);
+NOTICE:  adding not-null constraint to column "time"
+   create_hypertable    
+------------------------
+ (51,public,hyper_84,t)
+(1 row)
+
+INSERT INTO hyper_84 VALUES ('2024-01-01', 1, 1, 1.0);
+ALTER TABLE hyper_84 SET (timescaledb.compress, timescaledb.compress_segmentby='device');
+NOTICE:  default order by for hypertable "hyper_84" is set to ""time" DESC"
+SELECT compress_chunk(ch) FROM show_chunks('hyper_84') ch;
+              compress_chunk               
+-------------------------------------------
+ _timescaledb_internal._hyper_51_110_chunk
+(1 row)
+
+-- indexscan for decompression: UPDATE
+UPDATE hyper_84 SET temp = 100 where device = 1;
+SELECT compress_chunk(ch) FROM show_chunks('hyper_84') ch;
+              compress_chunk               
+-------------------------------------------
+ _timescaledb_internal._hyper_51_110_chunk
+(1 row)
+
+-- indexscan for decompression: DELETE
+DELETE FROM hyper_84 WHERE device = 1;

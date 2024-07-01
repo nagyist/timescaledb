@@ -10,9 +10,9 @@
 #include <catalog/namespace.h>
 #include <catalog/pg_type.h>
 #include <common/base64.h>
+#include <funcapi.h>
 #include <utils/lsyscache.h>
 #include <utils/syscache.h>
-#include <funcapi.h>
 
 #include "compression/array.h"
 #include "compression/compression.h"
@@ -368,8 +368,7 @@ tsl_array_decompression_iterator_from_datum_forward(Datum compressed_array, Oid 
 
 	Assert(compressed_array_header->compression_algorithm == COMPRESSION_ALGORITHM_ARRAY);
 
-	if (element_type != compressed_array_header->element_type)
-		elog(ERROR, "trying to decompress the wrong type");
+	CheckCompressedData(element_type == compressed_array_header->element_type);
 
 	return array_decompression_iterator_alloc_forward(&si,
 													  compressed_array_header->element_type,
@@ -494,7 +493,7 @@ text_array_decompress_all_serialized_no_header(StringInfo si, bool has_nulls,
 	Simple8bRleSerialized *sizes_serialized = bytes_deserialize_simple8b_and_advance(si);
 
 	uint32 n_notnull;
-	uint32 *restrict sizes = simple8brle_decompress_all_uint32(sizes_serialized, &n_notnull);
+	const uint32 *sizes = simple8brle_decompress_all_uint32(sizes_serialized, &n_notnull);
 	const uint32 n_total = has_nulls ? nulls_serialized->num_elements : n_notnull;
 	CheckCompressedData(n_total >= n_notnull);
 
@@ -507,7 +506,7 @@ text_array_decompress_all_serialized_no_header(StringInfo si, bool has_nulls,
 	uint32 offset = 0;
 	for (uint32 i = 0; i < n_notnull; i++)
 	{
-		void *unaligned = consumeCompressedData(si, sizes[i]);
+		const void *unaligned = consumeCompressedData(si, sizes[i]);
 
 		/*
 		 * We start reading from the end of previous datum, but this pointer
@@ -517,7 +516,8 @@ text_array_decompress_all_serialized_no_header(StringInfo si, bool has_nulls,
 		 *
 		 * See the corresponding row-by-row code in bytes_to_datum_and_advance().
 		 */
-		void *vardata = DatumGetPointer(att_align_pointer(unaligned, TYPALIGN_INT, -1, unaligned));
+		const void *vardata =
+			DatumGetPointer(att_align_pointer(unaligned, TYPALIGN_INT, -1, unaligned));
 
 		/*
 		 * Check for potentially corrupt varlena headers since we're reading them
@@ -570,7 +570,20 @@ text_array_decompress_all_serialized_no_header(StringInfo si, bool has_nulls,
 
 	const int validity_bitmap_bytes = sizeof(uint64) * (pad_to_multiple(64, n_total) / 64);
 	uint64 *restrict validity_bitmap = MemoryContextAlloc(dest_mctx, validity_bitmap_bytes);
+
+	/*
+	 * First, mark all data as valid, we will fill the nulls later if needed.
+	 * Note that the validity bitmap size is a multiple of 64 bits. We have to
+	 * fill the tail bits with zeros, because the corresponding elements are not
+	 * valid.
+	 *
+	 */
 	memset(validity_bitmap, 0xFF, validity_bitmap_bytes);
+	if (n_total % 64)
+	{
+		const uint64 tail_mask = -1ULL >> (64 - n_total % 64);
+		validity_bitmap[n_total / 64] &= tail_mask;
+	}
 
 	if (has_nulls)
 	{
@@ -578,7 +591,7 @@ text_array_decompress_all_serialized_no_header(StringInfo si, bool has_nulls,
 		 * We have decompressed the data with nulls skipped, reshuffle it
 		 * according to the nulls bitmap.
 		 */
-		Simple8bRleBitmap nulls = simple8brle_bitmap_decompress(nulls_serialized);
+		const Simple8bRleBitmap nulls = simple8brle_bitmap_decompress(nulls_serialized);
 		CheckCompressedData(n_notnull + simple8brle_bitmap_num_ones(&nulls) == n_total);
 
 		int current_notnull_element = n_notnull - 1;
@@ -611,18 +624,6 @@ text_array_decompress_all_serialized_no_header(StringInfo si, bool has_nulls,
 		}
 
 		Assert(current_notnull_element == -1);
-	}
-	else
-	{
-		/*
-		 * The validity bitmap size is a multiple of 64 bits. Fill the tail bits
-		 * with zeros, because the corresponding elements are not valid.
-		 */
-		if (n_total % 64)
-		{
-			const uint64 tail_mask = -1ULL >> (64 - n_total % 64);
-			validity_bitmap[n_total / 64] &= tail_mask;
-		}
 	}
 
 	ArrowArray *result = MemoryContextAllocZero(dest_mctx, sizeof(ArrowArray) + sizeof(void *) * 3);

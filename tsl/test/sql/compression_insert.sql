@@ -687,6 +687,19 @@ SELECT count(compress_chunk(ch)) FROM show_chunks('test_copy') ch;
 
 \copy test_copy FROM data/copy_data.csv WITH CSV HEADER;
 
+-- Also test the code path where the chunk insert state goes out of cache.
+set timescaledb.max_open_chunks_per_insert = 1;
+
+truncate table test_copy;
+
+INSERT INTO test_copy SELECT generate_series(1,25,1), -1;
+
+SELECT count(compress_chunk(ch)) FROM show_chunks('test_copy') ch;
+
+\copy test_copy FROM data/copy_data.csv WITH CSV HEADER;
+
+reset timescaledb.max_open_chunks_per_insert;
+
 DROP TABLE test_copy;
 
 -- Text limitting decompressed tuple during an insert
@@ -716,3 +729,22 @@ INSERT INTO test_limit SELECT t, 11 FROM generate_series(1,6000,1000) t;
 \set ON_ERROR_STOP 1
 
 DROP TABLE test_limit;
+RESET timescaledb.max_tuples_decompressed_per_dml_transaction;
+
+-- test multiple unique constraints
+CREATE TABLE multi_unique (time timestamptz NOT NULL, u1 int, u2 int, value float, unique(time, u1), unique(time, u2));
+SELECT table_name FROM create_hypertable('multi_unique', 'time');
+ALTER TABLE multi_unique SET (timescaledb.compress, timescaledb.compress_segmentby = 'u1, u2');
+
+INSERT INTO multi_unique VALUES('2024-01-01', 0, 0, 1.0);
+SELECT count(compress_chunk(c)) FROM show_chunks('multi_unique') c;
+
+\set ON_ERROR_STOP 0
+-- all INSERTS should fail with constraint violation
+BEGIN; INSERT INTO multi_unique VALUES('2024-01-01', 0, 0, 1.0); ROLLBACK;
+BEGIN; INSERT INTO multi_unique VALUES('2024-01-01', 0, 1, 1.0); ROLLBACK;
+BEGIN; INSERT INTO multi_unique VALUES('2024-01-01', 1, 0, 1.0); ROLLBACK;
+\set ON_ERROR_STOP 1
+
+DROP TABLE multi_unique;
+

@@ -20,6 +20,8 @@ set(SOURCES
     event_trigger.c
     extension.c
     extension_constants.c
+    expression_utils.c
+    foreign_key.c
     gapfill.c
     guc.c
     histogram.c
@@ -45,7 +47,8 @@ set(SOURCES
     trigger.c
     utils.c
     version.c
-    with_clause_parser.c)
+    with_clause_parser.c
+    tss_callbacks.c)
 
 # Add test source code in Debug builds
 if(CMAKE_BUILD_TYPE MATCHES Debug)

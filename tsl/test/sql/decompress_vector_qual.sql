@@ -4,7 +4,7 @@
 
 \c :TEST_DBNAME :ROLE_SUPERUSER
 
-create function stable_identity(x anyelement) returns anyelement as $$ select x $$ language sql stable;
+create function stable_abs(x int4) returns int4 as 'int4abs' language internal stable;
 
 create table vectorqual(metric1 int8, ts timestamp, metric2 int8, device int8);
 select create_hypertable('vectorqual', 'ts');
@@ -26,6 +26,12 @@ insert into vectorqual(ts, device, metric2, metric3, metric4) values ('2023-01-0
 select count(compress_chunk(x, true)) from show_chunks('vectorqual') x;
 
 select * from vectorqual order by vectorqual;
+
+-- single chunk
+select * from vectorqual where ts between '2019-02-02' and '2020-02-02' order by vectorqual;
+select * from vectorqual where ts between '2020-02-02' and '2021-02-02' order by vectorqual;
+select * from vectorqual where ts between '2021-02-02' and '2022-02-02' order by vectorqual;
+select * from vectorqual where ts between '2022-02-02' and '2023-02-02' order by vectorqual;
 
 set timescaledb.debug_require_vector_qual to 'only' /* all following quals must be vectorized */;
 select count(*) from vectorqual where ts > '1999-01-01 00:00:00';
@@ -89,7 +95,7 @@ execute p(33);
 deallocate p;
 
 -- Also try query parameter in combination with a stable function.
-prepare p(int4) as select count(*) from vectorqual where metric3 = stable_identity($1);
+prepare p(int4) as select count(*) from vectorqual where metric3 = stable_abs($1);
 execute p(33);
 deallocate p;
 
@@ -164,7 +170,7 @@ select count(*) from vectorqual where metric3 !!! 777;
 select count(*) from vectorqual where metric3 !!! any(array[777, 888]);
 select count(*) from vectorqual where metric3 !!! 777 or metric3 !!! 888;
 select count(*) from vectorqual where metric3 !!! 666 and (metric3 !!! 777 or metric3 !!! 888);
-select count(*) from vectorqual where metric3 !!! 666 and (metric3 !!! 777 or metric3 !!! stable_identity(888));
+select count(*) from vectorqual where metric3 !!! 666 and (metric3 !!! 777 or metric3 !!! stable_abs(888));
 
 set timescaledb.debug_require_vector_qual to 'forbid';
 select count(*) from vectorqual where not metric3 !!! 777;
@@ -187,7 +193,7 @@ set timescaledb.debug_require_vector_qual to 'only';
 select count(*) from vectorqual where metric4 is null;
 select count(*) from vectorqual where metric4 is not null;
 select count(*) from vectorqual where metric3 = 777 or metric4 is not null;
-select count(*) from vectorqual where metric3 = stable_identity(777) or metric4 is null;
+select count(*) from vectorqual where metric3 = stable_abs(777) or metric4 is null;
 
 
 -- Can't vectorize conditions on system columns. Have to check this on a single

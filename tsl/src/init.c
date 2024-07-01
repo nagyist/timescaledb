@@ -9,11 +9,11 @@
 
 #include "bgw_policy/compression_api.h"
 #include "bgw_policy/continuous_aggregate_api.h"
-#include "bgw_policy/retention_api.h"
 #include "bgw_policy/job.h"
 #include "bgw_policy/job_api.h"
-#include "bgw_policy/reorder_api.h"
 #include "bgw_policy/policies_v2.h"
+#include "bgw_policy/reorder_api.h"
+#include "bgw_policy/retention_api.h"
 #include "chunk.h"
 #include "chunk_api.h"
 #include "compression/api.h"
@@ -27,9 +27,9 @@
 #include "config.h"
 #include "continuous_aggs/create.h"
 #include "continuous_aggs/insert.h"
+#include "continuous_aggs/invalidation.h"
 #include "continuous_aggs/options.h"
 #include "continuous_aggs/refresh.h"
-#include "continuous_aggs/invalidation.h"
 #include "continuous_aggs/repair.h"
 #include "continuous_aggs/utils.h"
 #include "cross_module_fn.h"
@@ -37,9 +37,9 @@
 #include "hypertable.h"
 #include "license_guc.h"
 #include "nodes/decompress_chunk/planner.h"
-#include "nodes/skip_scan/skip_scan.h"
 #include "nodes/gapfill/gapfill_functions.h"
-#include "partialize_agg.h"
+#include "nodes/skip_scan/skip_scan.h"
+#include "nodes/vector_agg/plan.h"
 #include "partialize_finalize.h"
 #include "planner.h"
 #include "process_utility.h"
@@ -118,7 +118,7 @@ CrossModuleFunctions tsl_cm_functions = {
 	.policies_show = policies_show,
 
 	/* Vectorized queries */
-	.push_down_aggregation = apply_vectorized_agg_optimization,
+	.tsl_postprocess_plan = tsl_postprocess_plan,
 
 	/* Continuous Aggregates */
 	.partialize_agg = tsl_partialize_agg,
@@ -133,6 +133,8 @@ CrossModuleFunctions tsl_cm_functions = {
 	.continuous_agg_update_options = continuous_agg_update_options,
 	.continuous_agg_validate_query = continuous_agg_validate_query,
 	.continuous_agg_get_bucket_function = continuous_agg_get_bucket_function,
+	.continuous_agg_get_bucket_function_info = continuous_agg_get_bucket_function_info,
+	.continuous_agg_migrate_to_time_bucket = continuous_agg_migrate_to_time_bucket,
 	.cagg_try_repair = tsl_cagg_try_repair,
 
 	/* Compression */
@@ -156,11 +158,7 @@ CrossModuleFunctions tsl_cm_functions = {
 	.compress_chunk = tsl_compress_chunk,
 	.decompress_chunk = tsl_decompress_chunk,
 	.decompress_batches_for_insert = decompress_batches_for_insert,
-#if PG14_GE
 	.decompress_target_segments = decompress_target_segments,
-#else
-	.decompress_target_segments = NULL,
-#endif
 
 	.show_chunk = chunk_show,
 	.create_compressed_chunk = tsl_create_compressed_chunk,
@@ -194,6 +192,7 @@ ts_module_init(PG_FUNCTION_ARGS)
 	_continuous_aggs_cache_inval_init();
 	_decompress_chunk_init();
 	_skip_scan_init();
+	_vector_agg_init();
 	/* Register a cleanup function to be called when the backend exits */
 	if (register_proc_exit)
 		on_proc_exit(ts_module_cleanup_on_pg_exit, 0);

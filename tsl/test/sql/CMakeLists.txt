@@ -6,6 +6,7 @@ set(TEST_FILES
     agg_partials_pushdown.sql
     bgw_security.sql
     bgw_policy.sql
+    cagg_deprecated_bucket_ng.sql
     cagg_errors.sql
     cagg_invalidation.sql
     cagg_permissions.sql
@@ -15,12 +16,14 @@ set(TEST_FILES
     cagg_utils.sql
     compress_auto_sparse_index.sql
     compress_default.sql
+    compress_dml_copy.sql
     compress_float8_corrupt.sql
     compressed_detoaster.sql
     compressed_collation.sql
     compression_create_compressed_table.sql
     compression_conflicts.sql
     compression_defaults.sql
+    compression_fks.sql
     compression_insert.sql
     compression_policy.sql
     compression_qualpushdown.sql
@@ -28,17 +31,16 @@ set(TEST_FILES
     compression_sorted_merge_distinct.sql
     compression_sorted_merge_columns.sql
     decompress_index.sql
-    exp_cagg_monthly.sql
-    exp_cagg_next_gen.sql
-    exp_cagg_origin.sql
-    exp_cagg_timezone.sql
+    foreign_keys.sql
     move.sql
     partialize_finalize.sql
     policy_generalization.sql
     reorder.sql
-    skip_scan.sql
     size_utils_tsl.sql
+    skip_scan.sql
     transparent_decompression_join_index.sql
+    vector_agg_default.sql
+    vector_agg_param.sql
     vectorized_aggregation.sql)
 
 if(USE_TELEMETRY)
@@ -49,6 +51,7 @@ if(CMAKE_BUILD_TYPE MATCHES Debug)
   list(
     APPEND
     TEST_FILES
+    bgw_custom.sql
     bgw_db_scheduler.sql
     bgw_job_stat_history.sql
     bgw_job_stat_history_errors.sql
@@ -61,6 +64,7 @@ if(CMAKE_BUILD_TYPE MATCHES Debug)
     chunk_merge.sql
     chunk_utils_compression.sql
     compression_algos.sql
+    compression_bgw.sql
     compression_ddl.sql
     compression_hypertable.sql
     compression_merge.sql
@@ -79,6 +83,10 @@ if(CMAKE_BUILD_TYPE MATCHES Debug)
     cagg_policy_run.sql
     decompress_memory.sql
     decompress_vector_qual.sql
+    exp_cagg_monthly.sql
+    exp_cagg_next_gen.sql
+    exp_cagg_origin.sql
+    exp_cagg_timezone.sql
     hypertable_generalization.sql
     insert_memory_usage.sql
     information_view_chunk_count.sql
@@ -110,6 +118,7 @@ endif()
 set(SOLO_TESTS
     # This interferes with other tests since it reloads the config to increase
     # log level.
+    bgw_custom
     bgw_scheduler_control
     bgw_db_scheduler
     bgw_job_stat_history_errors_permissions
@@ -126,12 +135,10 @@ set(SOLO_TESTS
     cagg_invalidation
     move
     reorder
-    telemetry_stats-${PG_VERSION_MAJOR})
+    telemetry_stats)
 
 set(TEST_TEMPLATES
-    bgw_custom.sql.in
     cagg_watermark.sql.in
-    compression_bgw.sql.in
     compression_sorted_merge.sql.in
     cagg_union_view.sql.in
     plan_skip_scan.sql.in
@@ -150,12 +157,13 @@ if(CMAKE_BUILD_TYPE MATCHES Debug)
     TEST_TEMPLATES
     cagg_bgw.sql.in
     cagg_ddl.sql.in
+    cagg_migrate_function.sql.in
     cagg_repair.sql.in
     cagg_usage.sql.in
     compression_errors.sql.in
     continuous_aggs.sql.in)
   if(USE_TELEMETRY)
-    list(APPEND TEST_TEMPLATES telemetry_stats.sql.in)
+    list(APPEND TEST_FILES telemetry_stats.sql)
   endif()
 endif(CMAKE_BUILD_TYPE MATCHES Debug)
 
@@ -165,7 +173,7 @@ if(EXISTS ${PG_CONFIG_H})
   file(STRINGS "${PG_CONFIG_H}" PG_USE_LLVM
        REGEX "^#[\t ]*define[\t ]+USE_LLVM[\t ]+1.*")
   if(PG_USE_LLVM)
-    list(APPEND TEST_TEMPLATES jit.sql.in)
+    list(APPEND TEST_FILES jit.sql)
   endif()
 endif()
 

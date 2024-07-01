@@ -15,18 +15,14 @@
 #include <access/table.h>
 #include <access/tableam.h>
 #include <access/toast_internals.h>
-#include <utils/fmgroids.h>
 #include <utils/expandeddatum.h>
+#include <utils/fmgroids.h>
 #include <utils/rel.h>
 #include <utils/relcache.h>
 
 #include <compat/compat.h>
-#include <compression/compression.h>
 #include "debug_assert.h"
-
-#if PG14_LT
-#define VARATT_EXTERNAL_GET_EXTSIZE(toast_pointer) (toast_pointer).va_extsize
-#endif
+#include <compression/compression.h>
 
 /* We redefine this postgres macro to fix a warning about signed integer comparison. */
 #define TS_VARATT_EXTERNAL_IS_COMPRESSED(toast_pointer)                                            \
@@ -217,7 +213,7 @@ ts_fetch_toast(Detoaster *detoaster, struct varatt_external *toast_pointer, stru
 
 /*
  * The memory context is used to store intermediate data, and is supposed to
- * live over the calls to detoaster_detoast_attr().
+ * live over the calls to detoaster_detoast_attr_copy().
  * That function itself can be called in a short-lived memory context.
  */
 void
@@ -277,38 +273,6 @@ ts_toast_fetch_datum(struct varlena *attr, Detoaster *detoaster, MemoryContext d
 	return result;
 }
 
-/*
- * Copy of Postgres' toast_decompress_datum(): Decompress a compressed version
- * of a varlena datum
- * The decompression functions have changed since PG13, so we have to keep two
- * implementations.
- */
-#if PG14_LT
-
-#include <common/pg_lzcompress.h>
-
-static struct varlena *
-ts_toast_decompress_datum(struct varlena *attr)
-{
-	struct varlena *result;
-
-	Assert(VARATT_IS_COMPRESSED(attr));
-
-	result = (struct varlena *) palloc(TOAST_COMPRESS_RAWSIZE(attr) + VARHDRSZ);
-	SET_VARSIZE(result, TOAST_COMPRESS_RAWSIZE(attr) + VARHDRSZ);
-
-	if (pglz_decompress(TOAST_COMPRESS_RAWDATA(attr),
-						TOAST_COMPRESS_SIZE(attr),
-						VARDATA(result),
-						TOAST_COMPRESS_RAWSIZE(attr),
-						true) < 0)
-		elog(ERROR, "compressed data is corrupted");
-
-	return result;
-}
-
-#else
-
 #include <access/toast_compression.h>
 
 static struct varlena *
@@ -334,19 +298,28 @@ ts_toast_decompress_datum(struct varlena *attr)
 			return NULL; /* keep compiler quiet */
 	}
 }
-#endif
 
 /*
  * Modification of Postgres' detoast_attr() where we use the stateful Detoaster
- * and skip some cases that don't occur for the toasted compressed data.
+ * and skip some cases that don't occur for the toasted compressed data. Even if
+ * the data is inline and no detoasting is needed, copies it into the destination
+ * memory context.
  */
 struct varlena *
-detoaster_detoast_attr(struct varlena *attr, Detoaster *detoaster, MemoryContext dest_mctx)
+detoaster_detoast_attr_copy(struct varlena *attr, Detoaster *detoaster, MemoryContext dest_mctx)
 {
 	if (!VARATT_IS_EXTENDED(attr))
 	{
-		/* Nothing to do here. */
-		return attr;
+		/*
+		 * This case is unlikely because the compressed data is almost always
+		 * toasted and not inline, but we still have to copy the data into the
+		 * destination memory context. The source compressed tuple may have
+		 * independent unknown lifetime.
+		 */
+		Size len = VARSIZE(attr);
+		struct varlena *result = (struct varlena *) MemoryContextAlloc(dest_mctx, len);
+		memcpy(result, attr, len);
+		return result;
 	}
 
 	if (VARATT_IS_EXTERNAL_ONDISK(attr))

@@ -6,8 +6,8 @@
 #pragma once
 
 #include <postgres.h>
-#include "export.h"
 #include "config.h"
+#include "export.h"
 
 #ifdef USE_TELEMETRY
 extern bool ts_telemetry_on(void);
@@ -31,7 +31,7 @@ extern bool ts_guc_enable_osm_reads;
 extern TSDLLEXPORT bool ts_guc_enable_dml_decompression;
 extern TSDLLEXPORT int ts_guc_max_tuples_decompressed_per_dml;
 extern TSDLLEXPORT bool ts_guc_enable_transparent_decompression;
-extern TSDLLEXPORT bool ts_guc_enable_decompression_logrep_markers;
+extern TSDLLEXPORT bool ts_guc_enable_compression_wal_markers;
 extern TSDLLEXPORT bool ts_guc_enable_decompression_sorted_merge;
 extern TSDLLEXPORT bool ts_guc_enable_skip_scan;
 extern TSDLLEXPORT bool ts_guc_enable_chunkwise_aggregation;
@@ -40,6 +40,7 @@ extern bool ts_guc_restoring;
 extern int ts_guc_max_open_chunks_per_insert;
 extern int ts_guc_max_cached_chunks_per_hypertable;
 extern TSDLLEXPORT bool ts_guc_enable_job_execution_logging;
+extern bool ts_guc_enable_tss_callbacks;
 
 #ifdef USE_TELEMETRY
 typedef enum TelemetryLevel
@@ -83,6 +84,8 @@ extern TSDLLEXPORT DebugRequireVectorQual ts_guc_debug_require_vector_qual;
 extern TSDLLEXPORT bool ts_guc_debug_compression_path_info;
 
 extern TSDLLEXPORT bool ts_guc_debug_require_batch_sorted_merge;
+
+extern TSDLLEXPORT bool ts_guc_debug_allow_cagg_with_deprecated_funcs;
 
 void _guc_init(void);
 

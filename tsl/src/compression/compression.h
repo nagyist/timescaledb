@@ -9,14 +9,14 @@
 #include <executor/tuptable.h>
 #include <fmgr.h>
 #include <lib/stringinfo.h>
-#include <utils/relcache.h>
 #include <nodes/execnodes.h>
+#include <utils/relcache.h>
 
 typedef struct BulkInsertStateData *BulkInsertState;
 
 #include "compat/compat.h"
-#include "nodes/decompress_chunk/detoaster.h"
 #include "hypertable.h"
+#include "nodes/decompress_chunk/detoaster.h"
 #include "segment_meta.h"
 #include "ts_catalog/compression_settings.h"
 
@@ -286,6 +286,7 @@ typedef struct BatchFilter
 	/* IS NULL or IS NOT NULL */
 	bool is_null_check;
 	bool is_null;
+	bool is_array_op;
 } BatchFilter;
 
 extern Datum tsl_compressed_data_decompress_forward(PG_FUNCTION_ARGS);
@@ -333,10 +334,8 @@ extern DecompressAllFunction tsl_get_decompress_all_function(CompressionAlgorith
 typedef struct Chunk Chunk;
 typedef struct ChunkInsertState ChunkInsertState;
 extern void decompress_batches_for_insert(const ChunkInsertState *cis, TupleTableSlot *slot);
-#if PG14_GE
 typedef struct HypertableModifyState HypertableModifyState;
 extern bool decompress_target_segments(HypertableModifyState *ht_state);
-#endif
 /* CompressSingleRowState methods */
 struct CompressSingleRowState;
 typedef struct CompressSingleRowState CompressSingleRowState;
@@ -347,7 +346,7 @@ extern bool segment_info_datum_is_in_group(SegmentInfo *segment_info, Datum datu
 extern TupleTableSlot *compress_row_exec(CompressSingleRowState *cr, TupleTableSlot *slot);
 extern void compress_row_end(CompressSingleRowState *cr);
 extern void compress_row_destroy(CompressSingleRowState *cr);
-extern void row_decompressor_decompress_row_to_table(RowDecompressor *row_decompressor);
+extern int row_decompressor_decompress_row_to_table(RowDecompressor *row_decompressor);
 extern void row_decompressor_decompress_row_to_tuplesort(RowDecompressor *row_decompressor,
 														 Tuplesortstate *tuplesortstate);
 extern void compress_chunk_populate_sort_info_for_column(CompressionSettings *settings, Oid table,

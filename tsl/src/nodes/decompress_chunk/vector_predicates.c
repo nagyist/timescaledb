@@ -10,9 +10,9 @@
 
 #include <postgres.h>
 
+#include <mb/pg_wchar.h>
 #include <utils/date.h>
 #include <utils/fmgroids.h>
-#include <mb/pg_wchar.h>
 
 #include "compression/arrow_c_data_interface.h"
 
@@ -71,7 +71,7 @@ vector_nulltest(const ArrowArray *arrow, int test_type, uint64 *restrict result)
 	const bool should_be_null = test_type == IS_NULL;
 
 	const uint16 bitmap_words = (arrow->length + 63) / 64;
-	const uint64 *restrict validity = (const uint64 *) arrow->buffers[0];
+	const uint64 *validity = (const uint64 *) arrow->buffers[0];
 	for (uint16 i = 0; i < bitmap_words; i++)
 	{
 		if (should_be_null)

@@ -7,25 +7,25 @@
 #include <postgres.h>
 #include <catalog/pg_proc.h>
 #include <catalog/pg_type.h>
-#include <utils/acl.h>
-#include <utils/syscache.h>
-#include <utils/lsyscache.h>
-#include <utils/guc.h>
-#include <utils/builtins.h>
-#include <utils/array.h>
-#include <utils/snapmgr.h>
-#include <utils/typcache.h>
 #include <funcapi.h>
 #include <math.h>
-#include <parser/parse_func.h>
 #include <miscadmin.h>
+#include <parser/parse_func.h>
+#include <utils/acl.h>
+#include <utils/array.h>
+#include <utils/builtins.h>
+#include <utils/guc.h>
+#include <utils/lsyscache.h>
+#include <utils/snapmgr.h>
+#include <utils/syscache.h>
+#include <utils/typcache.h>
 
-#include "hypertable_cache.h"
-#include "errors.h"
 #include "compat/compat.h"
-#include "chunk_adaptive.h"
 #include "chunk.h"
+#include "chunk_adaptive.h"
+#include "errors.h"
 #include "hypercube.h"
+#include "hypertable_cache.h"
 #include "utils.h"
 
 #define DEFAULT_CHUNK_SIZING_FN_NAME "calculate_chunk_interval"
@@ -741,7 +741,6 @@ ts_chunk_adaptive_set(PG_FUNCTION_ARGS)
 	Cache *hcache;
 	HeapTuple tuple;
 	TupleDesc tupdesc;
-	CatalogSecurityContext sec_ctx;
 	Datum values[2];
 	bool nulls[2] = { false, false };
 
@@ -793,10 +792,7 @@ ts_chunk_adaptive_set(PG_FUNCTION_ARGS)
 
 	/* Update the hypertable entry */
 	ht->fd.chunk_target_size = info.target_size_bytes;
-	ts_catalog_database_info_become_owner(ts_catalog_database_info_get(), &sec_ctx);
-	ts_hypertable_update(ht);
-	ts_catalog_restore_user(&sec_ctx);
-
+	ts_hypertable_update_chunk_sizing(ht);
 	ts_cache_release(hcache);
 
 	tuple = heap_form_tuple(tupdesc, values, nulls);

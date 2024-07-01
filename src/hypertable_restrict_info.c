@@ -8,6 +8,7 @@
 #include <catalog/pg_inherits.h>
 #include <optimizer/optimizer.h>
 #include <parser/parsetree.h>
+#include <tcop/tcopprot.h>
 #include <utils/array.h>
 #include <utils/builtins.h>
 #include <utils/lsyscache.h>
@@ -20,14 +21,12 @@
 #include "dimension.h"
 #include "dimension_slice.h"
 #include "dimension_vector.h"
+#include "expression_utils.h"
 #include "guc.h"
 #include "hypercube.h"
 #include "partitioning.h"
 #include "scan_iterator.h"
 #include "utils.h"
-
-#include <inttypes.h>
-#include <tcop/tcopprot.h>
 
 typedef struct DimensionRestrictInfo
 {
@@ -136,7 +135,7 @@ dimension_restrict_info_open_add(DimensionRestrictInfoOpen *dri, StrategyNumber 
 												   PointerGetDatum(lfirst(item)),
 												   dimvalues->type,
 												   &restype);
-		int64 value = ts_time_value_to_internal_or_infinite(datum, restype, NULL);
+		int64 value = ts_time_value_to_internal_or_infinite(datum, restype);
 
 		switch (strategy)
 		{
@@ -307,13 +306,12 @@ hypertable_restrict_info_get(HypertableRestrictInfo *hri, AttrNumber attno)
 
 typedef DimensionValues *(*get_dimension_values)(Const *c, bool use_or);
 
-static bool
-hypertable_restrict_info_add_expr(HypertableRestrictInfo *hri, PlannerInfo *root, List *expr_args,
-								  Oid op_oid, get_dimension_values func_get_dim_values, bool use_or)
+static void
+hypertable_restrict_info_add_expr(HypertableRestrictInfo *hri, PlannerInfo *root, Var *v,
+								  Expr *expr, Oid op_oid, get_dimension_values func_get_dim_values,
+								  bool use_or)
 {
-	Expr *leftop, *rightop, *expr;
 	DimensionRestrictInfo *dri;
-	Var *v;
 	Const *c;
 	RangeTblEntry *rte;
 	Oid columntype;
@@ -322,46 +320,21 @@ hypertable_restrict_info_add_expr(HypertableRestrictInfo *hri, PlannerInfo *root
 	Oid lefttype, righttype;
 	DimensionValues *dimvalues;
 
-	if (list_length(expr_args) != 2)
-		return false;
-
-	leftop = linitial(expr_args);
-	rightop = lsecond(expr_args);
-
-	if (IsA(leftop, RelabelType))
-		leftop = ((RelabelType *) leftop)->arg;
-	if (IsA(rightop, RelabelType))
-		rightop = ((RelabelType *) rightop)->arg;
-
-	if (IsA(leftop, Var))
-	{
-		v = (Var *) leftop;
-		expr = rightop;
-	}
-	else if (IsA(rightop, Var))
-	{
-		v = (Var *) rightop;
-		expr = leftop;
-		op_oid = get_commutator(op_oid);
-	}
-	else
-		return false;
-
 	dri = hypertable_restrict_info_get(hri, v->varattno);
 	/* the attribute is not a dimension */
 	if (dri == NULL)
-		return false;
+		return;
 
 	expr = (Expr *) eval_const_expressions(root, (Node *) expr);
 
 	if (!IsA(expr, Const) || !OidIsValid(op_oid) || !op_strict(op_oid))
-		return false;
+		return;
 
 	c = (Const *) expr;
 
 	/* quick check for a NULL constant */
 	if (c->constisnull)
-		return false;
+		return;
 
 	rte = rt_fetch(v->varno, root->parse->rtable);
 
@@ -369,11 +342,14 @@ hypertable_restrict_info_add_expr(HypertableRestrictInfo *hri, PlannerInfo *root
 	tce = lookup_type_cache(columntype, TYPECACHE_BTREE_OPFAMILY);
 
 	if (!op_in_opfamily(op_oid, tce->btree_opf))
-		return false;
+		return;
 
 	get_op_opfamily_properties(op_oid, tce->btree_opf, false, &strategy, &lefttype, &righttype);
 	dimvalues = func_get_dim_values(c, use_or);
-	return dimension_restrict_info_add(dri, strategy, c->constcollid, dimvalues);
+	if (dimension_restrict_info_add(dri, strategy, c->constcollid, dimvalues))
+	{
+		hri->num_base_restrictions++;
+	}
 }
 
 static DimensionValues *
@@ -426,7 +402,9 @@ static void
 hypertable_restrict_info_add_restrict_info(HypertableRestrictInfo *hri, PlannerInfo *root,
 										   RestrictInfo *ri)
 {
-	bool added = false;
+	Oid opno;
+	Var *var;
+	Expr *arg_value;
 
 	Expr *e = ri->clause;
 
@@ -434,40 +412,31 @@ hypertable_restrict_info_add_restrict_info(HypertableRestrictInfo *hri, PlannerI
 	if (contain_mutable_functions((Node *) e))
 		return;
 
-	switch (nodeTag(e))
+	if (ts_extract_expr_args(e, &var, &arg_value, &opno, NULL))
 	{
-		case T_OpExpr:
+		get_dimension_values value_func;
+		bool use_or;
+
+		switch (nodeTag(e))
 		{
-			OpExpr *op_expr = (OpExpr *) e;
-
-			added = hypertable_restrict_info_add_expr(hri,
-													  root,
-													  op_expr->args,
-													  op_expr->opno,
-													  dimension_values_create_from_single_element,
-													  false);
-			break;
+			case T_OpExpr:
+			{
+				value_func = dimension_values_create_from_single_element;
+				use_or = false;
+				break;
+			}
+			case T_ScalarArrayOpExpr:
+			{
+				value_func = dimension_values_create_from_array;
+				use_or = castNode(ScalarArrayOpExpr, e)->useOr;
+				break;
+			}
+			default:
+				/* we don't support other node types */
+				return;
 		}
-
-		case T_ScalarArrayOpExpr:
-		{
-			ScalarArrayOpExpr *scalar_expr = (ScalarArrayOpExpr *) e;
-
-			added = hypertable_restrict_info_add_expr(hri,
-													  root,
-													  scalar_expr->args,
-													  scalar_expr->opno,
-													  dimension_values_create_from_array,
-													  scalar_expr->useOr);
-			break;
-		}
-		default:
-			/* we don't support other node types */
-			break;
+		hypertable_restrict_info_add_expr(hri, root, var, arg_value, opno, value_func, use_or);
 	}
-
-	if (added)
-		hri->num_base_restrictions++;
 }
 
 void
@@ -692,14 +661,6 @@ ts_hypertable_restrict_info_get_chunks(HypertableRestrictInfo *hri, Hypertable *
 			chunk_ids = ts_chunk_id_find_in_subspace(ht, dimension_vectors);
 		}
 
-		/*
-		 * Always include the OSM chunk if we have one and OSM reads are
-		 * enabled. It has some virtual dimension slices (at the moment,
-		 * (+inf, +inf) slice for time, but it used to be different and might
-		 * change again.) So sometimes it will match and sometimes it won't,
-		 * so we have to check if it's already there not to add a duplicate.
-		 * Similarly if OSM reads are disabled then we exclude the OSM chunk.
-		 */
 		int32 osm_chunk_id = ts_chunk_get_osm_chunk_id(ht->fd.id);
 
 		if (osm_chunk_id != INVALID_CHUNK_ID)
@@ -710,7 +671,29 @@ ts_hypertable_restrict_info_get_chunks(HypertableRestrictInfo *hri, Hypertable *
 			}
 			else
 			{
-				chunk_ids = list_append_unique_int(chunk_ids, osm_chunk_id);
+				/*
+				 * At this point the OSM chunk was either:
+				 * 1. added to the list because it has a valid range that agrees with the
+				 * restrictions;
+				 * 2. not added because it has a valid range and it was excluded;
+				 * 3. not added because it has an invalid range and it was excluded.
+				 * If the chunk's range is invalid, only then should we consider adding it,
+				 * otherwise the exclusion logic should have correctly included or excluded it from
+				 * the list. Also, if the range is invalid but the NONCONTIGUOUS flag is not set,
+				 * indicating that the chunk is empty, we don't need to do a scan so we do not add
+				 * it either.
+				 */
+				const Dimension *time_dim = hyperspace_get_open_dimension(ht->space, 0);
+				DimensionSlice *slice = ts_chunk_get_osm_slice_and_lock(osm_chunk_id,
+																		time_dim->fd.id,
+																		LockTupleKeyShare,
+																		RowShareLock);
+				bool range_invalid =
+					ts_osm_chunk_range_is_invalid(slice->fd.range_start, slice->fd.range_end);
+
+				if (range_invalid &&
+					ts_flags_are_set_32(ht->fd.status, HYPERTABLE_STATUS_OSM_CHUNK_NONCONTIGUOUS))
+					chunk_ids = list_append_unique_int(chunk_ids, osm_chunk_id);
 			}
 		}
 	}
@@ -721,7 +704,7 @@ ts_hypertable_restrict_info_get_chunks(HypertableRestrictInfo *hri, Hypertable *
 	 * We don't care about the locking order here, because this code uses
 	 * AccessShareLock that doesn't conflict with itself.
 	 */
-	list_sort(chunk_ids, list_int_cmp_compat);
+	list_sort(chunk_ids, list_int_cmp);
 
 	return ts_chunk_scan_by_chunk_ids(ht->space, chunk_ids, num_chunks);
 }

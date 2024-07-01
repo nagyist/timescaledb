@@ -7,8 +7,8 @@
 #include <postgres.h>
 #include <access/htup_details.h>
 #include <access/tupmacs.h>
-#include <catalog/pg_aggregate.h>
 #include <catalog/namespace.h>
+#include <catalog/pg_aggregate.h>
 #include <catalog/pg_type.h>
 #include <common/base64.h>
 #include <funcapi.h>
@@ -19,14 +19,14 @@
 #include <utils/syscache.h>
 #include <utils/typcache.h>
 
+#include "compression/array.h"
+#include "compression/arrow_c_data_interface.h"
 #include "compression/compression.h"
+#include "compression/datum_serialize.h"
 #include "compression/dictionary.h"
+#include "compression/dictionary_hash.h"
 #include "compression/simple8b_rle.h"
 #include "compression/simple8b_rle_bitmap.h"
-#include "compression/array.h"
-#include "compression/dictionary_hash.h"
-#include "compression/datum_serialize.h"
-#include "compression/arrow_c_data_interface.h"
 
 /*
  * A compression bitmap is stored as
@@ -454,7 +454,20 @@ tsl_text_dictionary_decompress_all(Datum compressed, Oid element_type, MemoryCon
 	/* Fill validity and indices of the array elements, reshuffling for nulls if needed. */
 	const int validity_bitmap_bytes = sizeof(uint64) * pad_to_multiple(64, n_total) / 64;
 	uint64 *restrict validity_bitmap = MemoryContextAlloc(dest_mctx, validity_bitmap_bytes);
+
+	/*
+	 * First, mark all data as valid, we will fill the nulls later if needed.
+	 * Note that the validity bitmap size is a multiple of 64 bits. We have to
+	 * fill the tail bits with zeros, because the corresponding elements are not
+	 * valid.
+	 *
+	 */
 	memset(validity_bitmap, 0xFF, validity_bitmap_bytes);
+	if (n_total % 64)
+	{
+		const uint64 tail_mask = -1ULL >> (64 - n_total % 64);
+		validity_bitmap[n_total / 64] &= tail_mask;
+	}
 
 	if (header->has_nulls)
 	{
@@ -465,8 +478,9 @@ tsl_text_dictionary_decompress_all(Datum compressed, Oid element_type, MemoryCon
 		Simple8bRleBitmap nulls = simple8brle_bitmap_decompress(nulls_serialized);
 		CheckCompressedData(n_notnull + simple8brle_bitmap_num_ones(&nulls) == n_total);
 
-		int current_notnull_element = n_notnull - 1;
-		for (int i = n_total - 1; i >= 0; i--)
+		/* current_notnull_element needs to go below 0, so use signed type */
+		int64 current_notnull_element = n_notnull - 1;
+		for (int64 i = n_total - 1; i >= 0; i--)
 		{
 			Assert(i >= current_notnull_element);
 
@@ -484,18 +498,6 @@ tsl_text_dictionary_decompress_all(Datum compressed, Oid element_type, MemoryCon
 		}
 
 		Assert(current_notnull_element == -1);
-	}
-	else
-	{
-		/*
-		 * The validity bitmap size is a multiple of 64 bits. Fill the tail bits
-		 * with zeros, because the corresponding elements are not valid.
-		 */
-		if (n_total % 64)
-		{
-			const uint64 tail_mask = -1ULL >> (64 - n_total % 64);
-			validity_bitmap[n_total / 64] &= tail_mask;
-		}
 	}
 
 	ArrowArray *result = MemoryContextAllocZero(dest_mctx, sizeof(ArrowArray) + sizeof(void *) * 2);
