@@ -2,6 +2,8 @@
 -- Please see the included NOTICE for copyright information and
 -- LICENSE-TIMESCALE for a copy of the license.
 
+SET timezone TO PST8PDT;
+
 \set EXPLAIN_ANALYZE 'EXPLAIN (analyze,costs off,timing off,summary off)'
 
 CREATE TABLE continuous_agg_test(time int, data int);
@@ -43,6 +45,8 @@ SELECT * from _timescaledb_catalog.continuous_aggs_hypertable_invalidation_log;
 \c :TEST_DBNAME :ROLE_SUPERUSER
 INSERT INTO _timescaledb_catalog.continuous_aggs_invalidation_threshold VALUES (1, 15);
 \c :TEST_DBNAME :ROLE_DEFAULT_PERM_USER
+
+SET timezone TO PST8PDT;
 
 INSERT INTO continuous_agg_test VALUES (10, 1), (11, 2), (21, 3), (22, 4);
 
@@ -183,6 +187,8 @@ SET watermark = 2
 WHERE hypertable_id = 5;
 \c :TEST_DBNAME :ROLE_DEFAULT_PERM_USER
 
+SET timezone TO PST8PDT;
+
 INSERT INTO ts_continuous_test VALUES (1, 1);
 
 SELECT * FROM _timescaledb_catalog.continuous_aggs_invalidation_threshold;
@@ -238,8 +244,8 @@ PREPARE cagg_scan_1h AS SELECT * FROM chunks_1h;
 
 :EXPLAIN_ANALYZE EXECUTE ht_scan_realtime_1h;
 
-INSERT INTO chunks VALUES ('1901-08-01 01:01:01+01', 1, 2);
-CALL refresh_continuous_aggregate('chunks_1h', '1900-01-01', '2021-06-01');
+INSERT INTO chunks VALUES ('2000-08-01 01:01:01+01', 1, 2);
+CALL refresh_continuous_aggregate('chunks_1h', '2000-01-01', '2021-06-01');
 SELECT * FROM _timescaledb_functions.to_timestamp(_timescaledb_functions.cagg_watermark(:MAT_HT_ID_1H));
 :EXPLAIN_ANALYZE EXECUTE ht_scan_realtime_1h;
 
@@ -248,16 +254,16 @@ EXECUTE cagg_scan_1h;
 SELECT * FROM chunks_1h;
 
 -- Add new chunks to the non materialized part of the CAgg
-INSERT INTO chunks VALUES ('1910-08-01 01:01:01+01', 1, 2);
+INSERT INTO chunks VALUES ('2001-08-01 01:01:01+01', 1, 2);
 :EXPLAIN_ANALYZE EXECUTE cagg_scan_1h;
 :EXPLAIN_ANALYZE SELECT * FROM chunks_1h;
 
-INSERT INTO chunks VALUES ('1911-08-01 01:01:01+01', 1, 2);
+INSERT INTO chunks VALUES ('2002-08-01 01:01:01+01', 1, 2);
 :EXPLAIN_ANALYZE EXECUTE cagg_scan_1h;
 :EXPLAIN_ANALYZE SELECT * FROM chunks_1h;
 
 -- Materialize CAgg and check for plan time chunk exclusion
-CALL refresh_continuous_aggregate('chunks_1h', '1900-01-01', '2021-06-01');
+CALL refresh_continuous_aggregate('chunks_1h', '2000-01-01', '2021-06-01');
 :EXPLAIN_ANALYZE EXECUTE cagg_scan_1h;
 :EXPLAIN_ANALYZE SELECT * FROM chunks_1h;
 
@@ -271,8 +277,8 @@ RESET timescaledb.enable_chunk_append;
 RESET timescaledb.enable_constraint_aware_append;
 
 -- Insert new values and check watermark changes
-INSERT INTO chunks VALUES ('1920-08-01 01:01:01+01', 1, 2);
-CALL refresh_continuous_aggregate('chunks_1h', '1900-01-01', '2021-06-01');
+INSERT INTO chunks VALUES ('2003-08-01 01:01:01+01', 1, 2);
+CALL refresh_continuous_aggregate('chunks_1h', '2000-01-01', '2021-06-01');
 SELECT * FROM _timescaledb_functions.to_timestamp(_timescaledb_functions.cagg_watermark(:MAT_HT_ID_1H));
 :EXPLAIN_ANALYZE EXECUTE ht_scan_realtime_1h;
 
@@ -280,24 +286,24 @@ SELECT * FROM _timescaledb_functions.to_timestamp(_timescaledb_functions.cagg_wa
 EXECUTE cagg_scan_1h;
 SELECT * FROM chunks_1h;
 
-INSERT INTO chunks VALUES ('1930-08-01 01:01:01+01', 1, 2);
-CALL refresh_continuous_aggregate('chunks_1h', '1900-01-01', '2021-06-01');
+INSERT INTO chunks VALUES ('2004-08-01 01:01:01+01', 1, 2);
+CALL refresh_continuous_aggregate('chunks_1h', '2000-01-01', '2021-06-01');
 SELECT * FROM _timescaledb_functions.to_timestamp(_timescaledb_functions.cagg_watermark(:MAT_HT_ID_1H));
 :EXPLAIN_ANALYZE EXECUTE ht_scan_realtime_1h;
 
 -- Two invalidations without prepared statement execution between
-INSERT INTO chunks VALUES ('1931-08-01 01:01:01+01', 1, 2);
-CALL refresh_continuous_aggregate('chunks_1h', '1900-01-01', '2021-06-01');
-INSERT INTO chunks VALUES ('1932-08-01 01:01:01+01', 1, 2);
-CALL refresh_continuous_aggregate('chunks_1h', '1900-01-01', '2021-06-01');
+INSERT INTO chunks VALUES ('2005-08-01 01:01:01+01', 1, 2);
+CALL refresh_continuous_aggregate('chunks_1h', '2000-01-01', '2021-06-01');
+INSERT INTO chunks VALUES ('2006-08-01 01:01:01+01', 1, 2);
+CALL refresh_continuous_aggregate('chunks_1h', '2000-01-01', '2021-06-01');
 SELECT * FROM _timescaledb_functions.to_timestamp(_timescaledb_functions.cagg_watermark(:MAT_HT_ID_1H));
 :EXPLAIN_ANALYZE EXECUTE ht_scan_realtime_1h;
 
 -- Multiple prepared statement executions followed by one invalidation
 :EXPLAIN_ANALYZE EXECUTE ht_scan_realtime_1h;
 :EXPLAIN_ANALYZE EXECUTE ht_scan_realtime_1h;
-INSERT INTO chunks VALUES ('1940-08-01 01:01:01+01', 1, 2);
-CALL refresh_continuous_aggregate('chunks_1h', '1900-01-01', '2021-06-01');
+INSERT INTO chunks VALUES ('2007-08-01 01:01:01+01', 1, 2);
+CALL refresh_continuous_aggregate('chunks_1h', '2000-01-01', '2021-06-01');
 :EXPLAIN_ANALYZE EXECUTE ht_scan_realtime_1h;
 
 -- Compare prepared statement with ad-hoc query
@@ -321,8 +327,8 @@ SELECT * FROM _timescaledb_functions.to_timestamp(_timescaledb_functions.cagg_wa
 :EXPLAIN_ANALYZE EXECUTE ht_scan_realtime_1h;
 
 -- Update after truncate
-INSERT INTO chunks VALUES ('1950-08-01 01:01:01+01', 1, 2);
-CALL refresh_continuous_aggregate('chunks_1h', '1900-01-01', '2021-06-01');
+INSERT INTO chunks VALUES ('2008-08-01 01:01:01+01', 1, 2);
+CALL refresh_continuous_aggregate('chunks_1h', '2000-01-01', '2021-06-01');
 SELECT * FROM _timescaledb_functions.to_timestamp(_timescaledb_functions.cagg_watermark(:MAT_HT_ID_1H));
 :EXPLAIN_ANALYZE EXECUTE ht_scan_realtime_1h;
 
@@ -361,14 +367,14 @@ PREPARE cagg_scan_1d AS SELECT * FROM chunks_1d;
 
 :EXPLAIN_ANALYZE EXECUTE ht_scan_realtime_1d;
 
-INSERT INTO chunks VALUES ('2000-08-01 01:01:01+01', 1, 2);
-CALL refresh_continuous_aggregate('chunks_1h', '1900-01-01', '2021-06-01');
-CALL refresh_continuous_aggregate('chunks_1d', '1900-01-01', '2021-06-01');
+INSERT INTO chunks VALUES ('2009-08-01 01:01:01+01', 1, 2);
+CALL refresh_continuous_aggregate('chunks_1h', '2000-01-01', '2021-06-01');
+CALL refresh_continuous_aggregate('chunks_1d', '2000-01-01', '2021-06-01');
 :EXPLAIN_ANALYZE EXECUTE ht_scan_realtime_1d;
 
 INSERT INTO chunks VALUES ('2010-08-01 01:01:01+01', 1, 2);
-CALL refresh_continuous_aggregate('chunks_1h', '1900-01-01', '2021-06-01');
-CALL refresh_continuous_aggregate('chunks_1d', '1900-01-01', '2021-06-01');
+CALL refresh_continuous_aggregate('chunks_1h', '2000-01-01', '2021-06-01');
+CALL refresh_continuous_aggregate('chunks_1d', '2000-01-01', '2021-06-01');
 :EXPLAIN_ANALYZE EXECUTE ht_scan_realtime_1d;
 
 -- Stored procedure - watermark
@@ -384,11 +390,11 @@ END$$ LANGUAGE plpgsql;
 SELECT * FROM cur_watermark_plsql(:MAT_HT_ID_1H);
 
 INSERT INTO chunks VALUES ('2011-08-01 01:01:01+01', 1, 2);
-CALL refresh_continuous_aggregate('chunks_1h', '1900-01-01', '2021-06-01');
+CALL refresh_continuous_aggregate('chunks_1h', '2000-01-01', '2021-06-01');
 SELECT * FROM cur_watermark_plsql(:MAT_HT_ID_1H);
 
 INSERT INTO chunks VALUES ('2012-08-01 01:01:01+01', 1, 2);
-CALL refresh_continuous_aggregate('chunks_1h', '1900-01-01', '2021-06-01');
+CALL refresh_continuous_aggregate('chunks_1h', '2000-01-01', '2021-06-01');
 SELECT * FROM cur_watermark_plsql(:MAT_HT_ID_1H);
 
 -- Stored procedure - result
@@ -409,7 +415,7 @@ INSERT INTO chunks VALUES ('2013-08-01 01:01:01+01', 1, 2);
 SELECT * FROM cur_cagg_result_count();
 
 -- Materialize
-CALL refresh_continuous_aggregate('chunks_1h', '1900-01-01', '2021-06-01');
+CALL refresh_continuous_aggregate('chunks_1h', '2000-01-01', '2021-06-01');
 SELECT * FROM cur_cagg_result_count();
 
 -- Ensure all elements are materialized (i.e., watermark is moved properly)
@@ -425,7 +431,7 @@ SELECT _timescaledb_functions.to_timestamp(_timescaledb_functions.cagg_watermark
 EXECUTE watermark_query;
 
 INSERT INTO chunks VALUES ('2013-09-01 01:01:01+01', 1, 2);
-CALL refresh_continuous_aggregate('chunks_1h', '1900-01-01', '2021-06-01');
+CALL refresh_continuous_aggregate('chunks_1h', '2000-01-01', '2021-06-01');
 
 SELECT _timescaledb_functions.to_timestamp(_timescaledb_functions.cagg_watermark(:MAT_HT_ID_1H));
 EXECUTE watermark_query;
@@ -433,13 +439,13 @@ EXECUTE watermark_query;
 -- Disable constification of watermark values
 SET timescaledb.enable_cagg_watermark_constify = OFF;
 INSERT INTO chunks VALUES ('2014-01-01 01:01:01+01', 1, 2);
-CALL refresh_continuous_aggregate('chunks_1h', '1900-01-01', '2021-06-01');
+CALL refresh_continuous_aggregate('chunks_1h', '2000-01-01', '2021-06-01');
 :EXPLAIN_ANALYZE EXECUTE ht_scan_realtime_1h;
 RESET timescaledb.enable_cagg_watermark_constify;
 
 -- Select with projection
 INSERT INTO chunks VALUES ('2015-01-01 01:01:01+01', 1, 2);
-CALL refresh_continuous_aggregate('chunks_1h', '1900-01-01', '2021-06-01');
+CALL refresh_continuous_aggregate('chunks_1h', '2000-01-01', '2021-06-01');
 :EXPLAIN_ANALYZE SELECT device FROM chunks_1h;
 
 -- Watermark function use other tables in WHERE condition (should not be constified)

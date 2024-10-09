@@ -88,6 +88,7 @@ static char *ts_guc_default_orderby_fn = NULL;
 TSDLLEXPORT bool ts_guc_enable_job_execution_logging = false;
 bool ts_guc_enable_tss_callbacks = true;
 TSDLLEXPORT bool ts_guc_enable_delete_after_compression = false;
+TSDLLEXPORT bool ts_guc_enable_merge_on_cagg_refresh = false;
 
 /* default value of ts_guc_max_open_chunks_per_insert and ts_guc_max_cached_chunks_per_hypertable
  * will be set as their respective boot-value when the GUC mechanism starts up */
@@ -124,6 +125,7 @@ DebugRequireOption ts_guc_debug_require_vector_agg = DRO_Allow;
 #endif
 
 bool ts_guc_debug_compression_path_info = false;
+bool ts_guc_enable_rowlevel_compression_locking = false;
 
 static bool ts_guc_enable_hypertable_create = true;
 static bool ts_guc_enable_hypertable_compression = true;
@@ -256,7 +258,7 @@ static bool
 check_segmentby_func(char **newval, void **extra, GucSource source)
 {
 	/* if the extension doesn't exist you can't check for the function, have to take it on faith */
-	if (ts_extension_is_loaded())
+	if (ts_extension_is_loaded_and_not_upgrading())
 	{
 		Oid segment_func_oid = get_segmentby_func(*newval);
 
@@ -298,7 +300,7 @@ static bool
 check_orderby_func(char **newval, void **extra, GucSource source)
 {
 	/* if the extension doesn't exist you can't check for the function, have to take it on faith */
-	if (ts_extension_is_loaded())
+	if (ts_extension_is_loaded_and_not_upgrading())
 	{
 		Oid func_oid = get_orderby_func(*newval);
 
@@ -572,6 +574,17 @@ _guc_init(void)
 							 NULL,
 							 NULL);
 
+	DefineCustomBoolVariable(MAKE_EXTOPTION("enable_merge_on_cagg_refresh"),
+							 "Enable MERGE statement on cagg refresh",
+							 "Enable MERGE statement on cagg refresh",
+							 &ts_guc_enable_merge_on_cagg_refresh,
+							 false,
+							 PGC_USERSET,
+							 0,
+							 NULL,
+							 NULL,
+							 NULL);
+
 	/*
 	 * Define the limit on number of invalidation-based refreshes we allow per
 	 * refresh call. If this limit is exceeded, fall back to a single refresh that
@@ -813,6 +826,17 @@ _guc_init(void)
 							 /* short_desc= */ "show various compression-related debug info",
 							 /* long_desc= */ "this is for debugging/information purposes",
 							 /* valueAddr= */ &ts_guc_debug_compression_path_info,
+							 /* bootValue= */ false,
+							 /* context= */ PGC_USERSET,
+							 /* flags= */ 0,
+							 /* check_hook= */ NULL,
+							 /* assign_hook= */ NULL,
+							 /* show_hook= */ NULL);
+
+	DefineCustomBoolVariable(/* name= */ MAKE_EXTOPTION("enable_rowlevel_compression_locking"),
+							 /* short_desc= */ "Use rowlevel locking during compression",
+							 /* long_desc= */ "Use only if you know what you are doing",
+							 /* valueAddr= */ &ts_guc_enable_rowlevel_compression_locking,
 							 /* bootValue= */ false,
 							 /* context= */ PGC_USERSET,
 							 /* flags= */ 0,

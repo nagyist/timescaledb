@@ -172,9 +172,9 @@ os.environ["GIT_COMMITTER_NAME"] = token_user.name
 # address. It is required so that the commits are recognized by Github as made
 # by the user. That is, if you use a wrong e-mail, there won't be a clickable
 # profile picture next to the commit in the Github interface.
-os.environ[
-    "GIT_COMMITTER_EMAIL"
-] = f"{token_user.id}+{token_user.login}@users.noreply.github.com"
+os.environ["GIT_COMMITTER_EMAIL"] = (
+    f"{token_user.id}+{token_user.login}@users.noreply.github.com"
+)
 print(
     f"Will commit as {os.environ['GIT_COMMITTER_NAME']} <{os.environ['GIT_COMMITTER_EMAIL']}>"
 )
@@ -288,7 +288,7 @@ for commit_sha, commit_title in main_commits:
     pygithub_commit = source_repo.get_commit(sha=commit_sha)
 
     pulls = pygithub_commit.get_pulls()
-    if not pulls:
+    if not pulls or pulls.totalCount == 0:
         print(f"{commit_sha[:9]} '{commit_title}' does not belong to a PR.")
         continue
 

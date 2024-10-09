@@ -15,6 +15,8 @@ CREATE TABLESPACE tablespace2 OWNER :ROLE_DEFAULT_PERM_USER LOCATION :TEST_TABLE
 
 \c :TEST_DBNAME :ROLE_DEFAULT_PERM_USER
 
+SET timezone TO PST8PDT;
+
 CREATE TABLE test1 ("Time" timestamptz, i integer, b bigint, t text);
 SELECT table_name from create_hypertable('test1', 'Time', chunk_time_interval=> INTERVAL '1 day');
 
@@ -126,7 +128,7 @@ SELECT tablename
 FROM pg_tables WHERE tablespace = 'tablespace1';
 
 \set ON_ERROR_STOP 0
-SELECT move_chunk(chunk=>:'COMPRESSED_CHUNK_NAME', destination_tablespace=>'tablespace1', index_destination_tablespace=>'tablespace1',  reorder_index=>'_timescaledb_internal."compress_hyper_2_28_chunk_b__ts_meta_sequence_num_idx"');
+SELECT move_chunk(chunk=>:'COMPRESSED_CHUNK_NAME', destination_tablespace=>'tablespace1', index_destination_tablespace=>'tablespace1',  reorder_index=>'_timescaledb_internal."compress_hyper_2_28_chunk_b__ts_meta_min_1__ts_meta_max_1_idx"');
 \set ON_ERROR_STOP 1
 
 -- ensure that both compressed and uncompressed chunks moved
@@ -355,6 +357,8 @@ CALL refresh_continuous_aggregate('test1_cont_view', NULL, NULL);
 SELECT count(*) FROM test1_cont_view;
 
 \c :TEST_DBNAME :ROLE_SUPERUSER
+
+SET timezone TO PST8PDT;
 
 SELECT chunk.schema_name|| '.' || chunk.table_name as "COMPRESSED_CHUNK_NAME"
 FROM _timescaledb_catalog.chunk chunk

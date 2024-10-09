@@ -40,6 +40,7 @@
 #include "debug_point.h"
 #include "guc.h"
 #include "hypertable_cache.h"
+#include "jsonb_utils.h"
 #include "time_utils.h"
 #include "utils.h"
 
@@ -1747,4 +1748,129 @@ ts_update_placeholder(PG_FUNCTION_ARGS)
 {
 	elog(ERROR, "this stub function is used only as placeholder during extension updates");
 	PG_RETURN_NULL();
+}
+
+/*
+ * Get relation information from the syscache in one call.
+ *
+ * Returns relkind and access method used. Both are non-optional.
+ */
+void
+ts_get_rel_info(Oid relid, Oid *amoid, char *relkind)
+{
+	HeapTuple tuple;
+	Form_pg_class cform;
+
+	tuple = SearchSysCache1(RELOID, ObjectIdGetDatum(relid));
+
+	if (!HeapTupleIsValid(tuple))
+		elog(ERROR, "cache lookup failed for relation %u", relid);
+
+	cform = (Form_pg_class) GETSTRUCT(tuple);
+	*amoid = cform->relam;
+	*relkind = cform->relkind;
+	ReleaseSysCache(tuple);
+}
+
+/*
+ * Get relation information from the syscache in one call.
+ *
+ * Returns relid, relkind and access method used. All are non-optional.
+ */
+void
+ts_get_rel_info_by_name(const char *relnamespace, const char *relname, Oid *relid, Oid *amoid,
+						char *relkind)
+{
+	HeapTuple tuple;
+	Form_pg_class cform;
+	Oid namespaceoid = get_namespace_oid(relnamespace, false);
+
+	tuple = SearchSysCache2(RELNAMENSP, PointerGetDatum(relname), ObjectIdGetDatum(namespaceoid));
+
+	if (!HeapTupleIsValid(tuple))
+		elog(ERROR, "cache lookup failed for relation %s.%s", relnamespace, relname);
+
+	cform = (Form_pg_class) GETSTRUCT(tuple);
+	*relid = cform->oid;
+	*amoid = cform->relam;
+	*relkind = cform->relkind;
+	ReleaseSysCache(tuple);
+}
+
+static Oid hypercore_amoid = InvalidOid;
+
+bool
+ts_is_hypercore_am(Oid amoid)
+{
+	/* Can't use InvalidOid as an indication of non-cached value since
+	   get_am_oid() will return InvalidOid when the access method does not
+	   exist and we will do the lookup every time this query is called. This
+	   boolean can be removed once we know that there should exist an access
+	   method with the given name. */
+	static bool iscached = false;
+
+	if (!iscached && !OidIsValid(hypercore_amoid))
+	{
+		hypercore_amoid = get_am_oid("hypercore", true);
+		iscached = true;
+	}
+
+	if (!OidIsValid(hypercore_amoid))
+		return false;
+
+	/* Shouldn't get here for now */
+	Assert(false);
+
+	return amoid == hypercore_amoid;
+}
+
+/* this function fills in a jsonb with the non-null fields of
+ the error data and also includes the proc name and schema in the jsonb
+ we include these here to avoid adding these fields to the table */
+Jsonb *
+ts_errdata_to_jsonb(ErrorData *edata, Name proc_schema, Name proc_name)
+{
+	JsonbParseState *parse_state = NULL;
+	pushJsonbValue(&parse_state, WJB_BEGIN_OBJECT, NULL);
+	if (edata->sqlerrcode)
+		ts_jsonb_add_str(parse_state, "sqlerrcode", unpack_sql_state(edata->sqlerrcode));
+	if (edata->message)
+		ts_jsonb_add_str(parse_state, "message", edata->message);
+	if (edata->detail)
+		ts_jsonb_add_str(parse_state, "detail", edata->detail);
+	if (edata->hint)
+		ts_jsonb_add_str(parse_state, "hint", edata->hint);
+	if (edata->filename)
+		ts_jsonb_add_str(parse_state, "filename", edata->filename);
+	if (edata->lineno)
+		ts_jsonb_add_int32(parse_state, "lineno", edata->lineno);
+	if (edata->funcname)
+		ts_jsonb_add_str(parse_state, "funcname", edata->funcname);
+	if (edata->domain)
+		ts_jsonb_add_str(parse_state, "domain", edata->domain);
+	if (edata->context_domain)
+		ts_jsonb_add_str(parse_state, "context_domain", edata->context_domain);
+	if (edata->context)
+		ts_jsonb_add_str(parse_state, "context", edata->context);
+	if (edata->schema_name)
+		ts_jsonb_add_str(parse_state, "schema_name", edata->schema_name);
+	if (edata->table_name)
+		ts_jsonb_add_str(parse_state, "table_name", edata->table_name);
+	if (edata->column_name)
+		ts_jsonb_add_str(parse_state, "column_name", edata->column_name);
+	if (edata->datatype_name)
+		ts_jsonb_add_str(parse_state, "datatype_name", edata->datatype_name);
+	if (edata->constraint_name)
+		ts_jsonb_add_str(parse_state, "constraint_name", edata->constraint_name);
+	if (edata->internalquery)
+		ts_jsonb_add_str(parse_state, "internalquery", edata->internalquery);
+	if (edata->detail_log)
+		ts_jsonb_add_str(parse_state, "detail_log", edata->detail_log);
+	if (strlen(NameStr(*proc_schema)) > 0)
+		ts_jsonb_add_str(parse_state, "proc_schema", NameStr(*proc_schema));
+	if (strlen(NameStr(*proc_name)) > 0)
+		ts_jsonb_add_str(parse_state, "proc_name", NameStr(*proc_name));
+	/* we add the schema qualified name here as well*/
+	JsonbValue *result = pushJsonbValue(&parse_state, WJB_END_OBJECT, NULL);
+	return JsonbValueToJsonb(result);
 }

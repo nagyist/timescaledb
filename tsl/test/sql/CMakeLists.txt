@@ -30,6 +30,7 @@ set(TEST_FILES
     compression_policy.sql
     compression_qualpushdown.sql
     compression_settings.sql
+    compression_sequence_num_removal.sql
     compression_sorted_merge_distinct.sql
     compression_sorted_merge_columns.sql
     decompress_index.sql
@@ -41,6 +42,7 @@ set(TEST_FILES
     size_utils_tsl.sql
     skip_scan.sql
     transparent_decompression_join_index.sql
+    vector_agg_functions.sql
     vector_agg_param.sql
     vectorized_aggregation.sql)
 
@@ -107,7 +109,12 @@ if((${PG_VERSION_MAJOR} GREATER_EQUAL "15"))
   if(CMAKE_BUILD_TYPE MATCHES Debug)
     list(APPEND TEST_FILES bgw_scheduler_control.sql)
   endif()
-  list(APPEND TEST_FILES merge_compress.sql)
+  list(APPEND TEST_FILES merge_compress.sql cagg_query_using_merge.sql
+       cagg_refresh_using_merge.sql)
+endif()
+
+if((${PG_VERSION_MAJOR} GREATER_EQUAL "17"))
+  list(APPEND TEST_FILES privilege_maintain.sql)
 endif()
 
 set(SOLO_TESTS

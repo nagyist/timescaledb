@@ -11,6 +11,7 @@
 #include <access/tableam.h>
 #include <access/xact.h>
 #include <catalog/dependency.h>
+#include <commands/event_trigger.h>
 #include <commands/tablecmds.h>
 #include <commands/trigger.h>
 #include <libpq-fe.h>
@@ -32,6 +33,7 @@
 #include "cache.h"
 #include "chunk.h"
 #include "compression.h"
+#include "compression_storage.h"
 #include "create.h"
 #include "debug_point.h"
 #include "error_utils.h"
@@ -59,6 +61,15 @@ typedef struct CompressChunkCxt
 
 static Oid get_compressed_chunk_index_for_recompression(Chunk *uncompressed_chunk);
 static Oid recompress_chunk_segmentwise_impl(Chunk *chunk);
+
+static Node *
+create_dummy_query()
+{
+	RawStmt *query = NULL;
+	query = makeNode(RawStmt);
+	query->stmt = (Node *) makeNode(SelectStmt);
+	return (Node *) query;
+}
 
 static void
 compression_chunk_size_catalog_insert(int32 src_chunk_id, const RelationSize *src_size,
@@ -317,6 +328,11 @@ find_chunk_to_merge_into(Hypertable *ht, Chunk *current_chunk)
 	if (!ts_compression_settings_equal(ht_comp_settings, prev_comp_settings))
 		return NULL;
 
+	/* We don't support merging chunks with sequence numbers */
+	if (get_attnum(prev_comp_reloid, COMPRESSION_COLUMN_METADATA_SEQUENCE_NUM_NAME) !=
+		InvalidAttrNumber)
+		return NULL;
+
 	return previous_chunk;
 }
 
@@ -382,7 +398,7 @@ compress_chunk_impl(Oid hypertable_relid, Oid chunk_relid)
 	compresschunkcxt_init(&cxt, hcache, hypertable_relid, chunk_relid);
 
 	/* acquire locks on src and compress hypertable and src chunk */
-	ereport(LOG,
+	ereport(DEBUG1,
 			(errmsg("acquiring locks for compressing \"%s.%s\"",
 					get_namespace_name(get_rel_namespace(chunk_relid)),
 					get_rel_name(chunk_relid))));
@@ -392,7 +408,7 @@ compress_chunk_impl(Oid hypertable_relid, Oid chunk_relid)
 
 	/* acquire locks on catalog tables to keep till end of txn */
 	LockRelationOid(catalog_get_table_id(ts_catalog_get(), CHUNK), RowExclusiveLock);
-	ereport(LOG,
+	ereport(DEBUG1,
 			(errmsg("locks acquired for compressing \"%s.%s\"",
 					get_namespace_name(get_rel_namespace(chunk_relid)),
 					get_rel_name(chunk_relid))));
@@ -414,20 +430,29 @@ compress_chunk_impl(Oid hypertable_relid, Oid chunk_relid)
 	mergable_chunk = find_chunk_to_merge_into(cxt.srcht, cxt.srcht_chunk);
 	if (!mergable_chunk)
 	{
+		/*
+		 * Set up a dummy parsetree since we're calling AlterTableInternal
+		 * inside create_compress_chunk(). We can use anything here because we
+		 * are not calling EventTriggerDDLCommandEnd but we use a parse tree
+		 * type that CreateCommandTag can handle to avoid spurious printouts
+		 * in the event that EventTriggerDDLCommandEnd is called.
+		 */
+		EventTriggerAlterTableStart(create_dummy_query());
 		/* create compressed chunk and a new table */
 		compress_ht_chunk = create_compress_chunk(cxt.compress_ht, cxt.srcht_chunk, InvalidOid);
 		new_compressed_chunk = true;
-		ereport(LOG,
+		ereport(DEBUG1,
 				(errmsg("new compressed chunk \"%s.%s\" created",
 						NameStr(compress_ht_chunk->fd.schema_name),
 						NameStr(compress_ht_chunk->fd.table_name))));
+		EventTriggerAlterTableEnd();
 	}
 	else
 	{
 		/* use an existing compressed chunk to compress into */
 		compress_ht_chunk = ts_chunk_get_by_id(mergable_chunk->fd.compressed_chunk_id, true);
 		result_chunk_id = mergable_chunk->table_id;
-		ereport(LOG,
+		ereport(DEBUG1,
 				(errmsg("merge into existing compressed chunk \"%s.%s\"",
 						NameStr(compress_ht_chunk->fd.schema_name),
 						NameStr(compress_ht_chunk->fd.table_name))));
@@ -565,7 +590,7 @@ decompress_chunk_impl(Chunk *uncompressed_chunk, bool if_compressed)
 	ts_chunk_validate_chunk_status_for_operation(uncompressed_chunk, CHUNK_DECOMPRESS, true);
 	compressed_chunk = ts_chunk_get_by_id(uncompressed_chunk->fd.compressed_chunk_id, true);
 
-	ereport(LOG,
+	ereport(DEBUG1,
 			(errmsg("acquiring locks for decompressing \"%s.%s\"",
 					NameStr(uncompressed_chunk->fd.schema_name),
 					NameStr(uncompressed_chunk->fd.table_name))));
@@ -592,7 +617,7 @@ decompress_chunk_impl(Chunk *uncompressed_chunk, bool if_compressed)
 
 	/* acquire locks on catalog tables to keep till end of txn */
 	LockRelationOid(catalog_get_table_id(ts_catalog_get(), CHUNK), RowExclusiveLock);
-	ereport(LOG,
+	ereport(DEBUG1,
 			(errmsg("locks acquired for decompressing \"%s.%s\"",
 					NameStr(uncompressed_chunk->fd.schema_name),
 					NameStr(uncompressed_chunk->fd.table_name))));
@@ -677,8 +702,16 @@ tsl_create_compressed_chunk(PG_FUNCTION_ARGS)
 	/* Acquire locks on catalog tables to keep till end of txn */
 	LockRelationOid(catalog_get_table_id(ts_catalog_get(), CHUNK), RowExclusiveLock);
 
+	/*
+	 * Set up a dummy parsetree since we're calling AlterTableInternal inside
+	 * create_compress_chunk(). We can use anything here because we are not
+	 * calling EventTriggerDDLCommandEnd but we use a parse tree type that
+	 * CreateCommandTag can handle to avoid spurious printouts.
+	 */
+	EventTriggerAlterTableStart(create_dummy_query());
 	/* Create compressed chunk using existing table */
 	compress_ht_chunk = create_compress_chunk(cxt.compress_ht, cxt.srcht_chunk, chunk_table);
+	EventTriggerAlterTableEnd();
 
 	/* Copy chunk constraints (including fkey) to compressed chunk */
 	ts_chunk_constraints_create(cxt.compress_ht, compress_ht_chunk);
@@ -1119,12 +1152,12 @@ recompress_chunk_segmentwise_impl(Chunk *uncompressed_chunk)
 	 */
 	if (ts_chunk_clear_status(uncompressed_chunk,
 							  CHUNK_STATUS_COMPRESSED_UNORDERED | CHUNK_STATUS_COMPRESSED_PARTIAL))
-		ereport(LOG,
+		ereport(DEBUG1,
 				(errmsg("cleared chunk status for recompression: \"%s.%s\"",
 						NameStr(uncompressed_chunk->fd.schema_name),
 						NameStr(uncompressed_chunk->fd.table_name))));
 
-	ereport(LOG,
+	ereport(DEBUG1,
 			(errmsg("acquiring locks for recompression: \"%s.%s\"",
 					NameStr(uncompressed_chunk->fd.schema_name),
 					NameStr(uncompressed_chunk->fd.table_name))));
@@ -1212,7 +1245,6 @@ recompress_chunk_segmentwise_impl(Chunk *uncompressed_chunk)
 						compressed_chunk_rel,
 						compressed_rel_tupdesc->natts,
 						true /*need_bistate*/,
-						true /*reset_sequence*/,
 						0 /*insert options*/);
 
 	/* create an array of the segmentby column offsets in the compressed chunk */
@@ -1247,7 +1279,7 @@ recompress_chunk_segmentwise_impl(Chunk *uncompressed_chunk)
 
 	/* Index scan */
 	Relation index_rel = index_open(row_compressor.index_oid, ExclusiveLock);
-	ereport(LOG,
+	ereport(DEBUG1,
 			(errmsg("locks acquired for recompression: \"%s.%s\"",
 					NameStr(uncompressed_chunk->fd.schema_name),
 					NameStr(uncompressed_chunk->fd.table_name))));
