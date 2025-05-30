@@ -30,6 +30,10 @@ CROSSMODULE_WRAPPER(policy_compression_check);
 CROSSMODULE_WRAPPER(policy_refresh_cagg_add);
 CROSSMODULE_WRAPPER(policy_refresh_cagg_proc);
 CROSSMODULE_WRAPPER(policy_refresh_cagg_check);
+CROSSMODULE_WRAPPER(policy_process_hyper_inval_remove);
+CROSSMODULE_WRAPPER(policy_process_hyper_inval_add);
+CROSSMODULE_WRAPPER(policy_process_hyper_inval_proc);
+CROSSMODULE_WRAPPER(policy_process_hyper_inval_check);
 CROSSMODULE_WRAPPER(policy_refresh_cagg_remove);
 CROSSMODULE_WRAPPER(policy_reorder_add);
 CROSSMODULE_WRAPPER(policy_reorder_proc);
@@ -118,7 +122,7 @@ error_no_default_fn_community(void)
 	ereport(ERROR,
 			(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 			 errmsg("functionality not supported under the current \"%s\" license. Learn more at "
-					"https://timescale.com/.",
+					"https://tsdb.co/pdbir1r3",
 					ts_guc_license),
 			 errhint("To access all features and the best time-series experience, try out "
 					 "Timescale Cloud.")));
@@ -176,6 +180,13 @@ tsl_postprocess_plan_stub(PlannedStmt *stmt)
 
 static bool
 process_compress_table_default(Hypertable *ht, WithClauseResult *with_clause_options)
+{
+	error_no_default_fn_community();
+	pg_unreachable();
+}
+
+static void
+compression_enable_default(Hypertable *ht, WithClauseResult *with_clause_options)
 {
 	error_no_default_fn_community();
 	pg_unreachable();
@@ -359,6 +370,10 @@ TSDLLEXPORT CrossModuleFunctions ts_cm_functions_default = {
 	.policy_refresh_cagg_proc = error_no_default_fn_pg_community,
 	.policy_refresh_cagg_check = error_no_default_fn_pg_community,
 	.policy_refresh_cagg_remove = error_no_default_fn_pg_community,
+	.policy_process_hyper_inval_add = error_no_default_fn_pg_community,
+	.policy_process_hyper_inval_proc = error_no_default_fn_pg_community,
+	.policy_process_hyper_inval_check = error_no_default_fn_pg_community,
+	.policy_process_hyper_inval_remove = error_no_default_fn_pg_community,
 	.policy_reorder_add = error_no_default_fn_pg_community,
 	.policy_reorder_proc = error_no_default_fn_pg_community,
 	.policy_reorder_check = error_no_default_fn_pg_community,
@@ -426,7 +441,7 @@ TSDLLEXPORT CrossModuleFunctions ts_cm_functions_default = {
 	.bool_compressor_finish = error_no_default_fn_pg_community,
 	.bloom1_contains = error_no_default_fn_pg_community,
 
-	.compression_enable = NULL,
+	.compression_enable = compression_enable_default,
 
 	.show_chunk = error_no_default_fn_pg_community,
 	.create_chunk = error_no_default_fn_pg_community,
