@@ -737,7 +737,7 @@ process_cagg_invalidations_and_refresh(const ContinuousAgg *cagg,
 	 * same continuous aggregate when they don't have overlapping refresh
 	 * windows.
 	 */
-	LockRelationOid(hyper_relid, ExclusiveLock);
+	LockRelationOid(hyper_relid, RowExclusiveLock);
 	invalidations = invalidation_process_cagg_log(cagg,
 												  refresh_window,
 												  ts_guc_cagg_max_individual_materializations,
@@ -799,6 +799,17 @@ continuous_agg_refresh_internal(const ContinuousAgg *cagg,
 	 * still take a long time and it is probably best for consistency to always
 	 * prevent transaction blocks.  */
 	PreventInTransactionBlock(nonatomic, REFRESH_FUNCTION_NAME);
+
+	/*
+	 * We don't cagg refresh to fail because of decompression limit. So disable
+	 * the decompression limit for the duration of the refresh.
+	 */
+	const char *old_decompression_limit =
+		GetConfigOption("timescaledb.max_tuples_decompressed_per_dml_transaction", false, false);
+	SetConfigOption("timescaledb.max_tuples_decompressed_per_dml_transaction",
+					"0",
+					PGC_USERSET,
+					PGC_S_SESSION);
 
 	/* Connect to SPI manager due to the underlying SPI calls */
 	int rc = SPI_connect_ext(SPI_OPT_NONATOMIC);
@@ -911,6 +922,11 @@ continuous_agg_refresh_internal(const ContinuousAgg *cagg,
 
 	/* Restore search_path */
 	AtEOXact_GUC(false, save_nestlevel);
+
+	SetConfigOption("timescaledb.max_tuples_decompressed_per_dml_transaction",
+					old_decompression_limit,
+					PGC_USERSET,
+					PGC_S_SESSION);
 
 	rc = SPI_finish();
 	if (rc != SPI_OK_FINISH)
@@ -1129,7 +1145,7 @@ continuous_agg_split_refresh_window(ContinuousAgg *cagg, InternalTimeRange *orig
 					OPERATOR(pg_catalog.&&) \
 					pg_catalog.int8range(lowest_modified_value, greatest_modified_value) \
 					AND lowest_modified_value IS NOT NULL \
-					AND (greatest_modified_value IS NOT NULL AND greatest_modified_value != -210866803200000001) \
+					AND (greatest_modified_value IS NOT NULL AND greatest_modified_value != $7) \
 			) \
 		ORDER BY \
 			refresh_start %s;";
@@ -1143,14 +1159,15 @@ continuous_agg_split_refresh_window(ContinuousAgg *cagg, InternalTimeRange *orig
 
 	/* Prepare for SPI call */
 	int res;
-	Oid types[] = { INT4OID, INT4OID, INT4OID, INT8OID, INT8OID, INT8OID };
+	Oid types[] = { INT4OID, INT4OID, INT4OID, INT8OID, INT8OID, INT8OID, INT8OID };
 	Datum values[] = { Int32GetDatum(ht->fd.id),
 					   Int32GetDatum(time_dim->fd.id),
 					   Int32GetDatum(cagg->data.mat_hypertable_id),
 					   Int64GetDatum(batch_size),
 					   Int64GetDatum(refresh_window.start),
-					   Int64GetDatum(refresh_window.end) };
-	char nulls[] = { false, false, false, false, false, false };
+					   Int64GetDatum(refresh_window.end),
+					   Int64GetDatum(CAGG_INVALIDATION_WRONG_GREATEST_VALUE) };
+	char nulls[] = { false, false, false, false, false, false, false };
 	MemoryContext oldcontext = CurrentMemoryContext;
 
 	if (SPI_connect() != SPI_OK_CONNECT)
@@ -1161,7 +1178,7 @@ continuous_agg_split_refresh_window(ContinuousAgg *cagg, InternalTimeRange *orig
 	RestrictSearchPath();
 
 	res = SPI_execute_with_args(query_str,
-								6,
+								7,
 								types,
 								values,
 								nulls,
