@@ -214,6 +214,8 @@ lazy_build_hypercore_info_cache(Relation rel, bool create_chunk_constraints,
 {
 	Assert(OidIsValid(rel->rd_id) && (!ts_extension_is_loaded() || !ts_is_hypertable(rel->rd_id)));
 
+	PushActiveSnapshot(GetTransactionSnapshot());
+
 	const CompressionSettings *settings;
 	HypercoreInfo *hcinfo;
 	TupleDesc tupdesc = RelationGetDescr(rel);
@@ -257,8 +259,6 @@ lazy_build_hypercore_info_cache(Relation rel, bool create_chunk_constraints,
 
 		if (create_chunk_constraints)
 		{
-			ts_chunk_constraints_create(ht_compressed, c_chunk);
-			ts_trigger_create_all_on_chunk(c_chunk);
 			create_proxy_vacuum_index(rel, c_chunk->table_id);
 			RelationSize before_size = ts_relation_size_impl(RelationGetRelid(rel));
 			create_compression_relation_size_stats(chunk->fd.id,
@@ -327,6 +327,7 @@ lazy_build_hypercore_info_cache(Relation rel, bool create_chunk_constraints,
 			colsettings->cattnum_max = get_attnum(hcinfo->compressed_relid, max_attname);
 		}
 	}
+	PopActiveSnapshot();
 
 	return hcinfo;
 }
@@ -3766,11 +3767,7 @@ convert_to_hypercore_finish(Oid relid)
 	 * relcache invalidations. Previously there was sometimes a crash here
 	 * because the tuple sort state had a reference to a tuple descriptor in
 	 * the relcache. */
-#if (PG_VERSION_NUM >= 140001)
 	RelationCacheInvalidate(false);
-#else
-	RelationCacheInvalidate();
-#endif
 #endif
 
 	Chunk *chunk = ts_chunk_get_by_relid(conversionstate->relid, true);

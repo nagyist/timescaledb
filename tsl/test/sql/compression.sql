@@ -782,18 +782,14 @@ SELECT compress_chunk(i) FROM show_chunks('f_sensor_data') i;
 VACUUM ANALYZE f_sensor_data;
 
 -- Encourage use of parallel plans
+SET max_parallel_workers_per_gather = 4;
+SET min_parallel_index_scan_size = 0;
+SET min_parallel_table_scan_size = 0;
 SET parallel_setup_cost = 0;
 SET parallel_tuple_cost = 0;
-SET min_parallel_table_scan_size TO '0';
+SHOW max_parallel_workers;
 
 \set explain 'EXPLAIN (VERBOSE, COSTS OFF)'
-
-SHOW min_parallel_table_scan_size;
-SHOW max_parallel_workers;
-SHOW max_parallel_workers_per_gather;
-
-SET max_parallel_workers_per_gather = 4;
-SHOW max_parallel_workers_per_gather;
 
 -- We disable enable_parallel_append here to ensure
 -- that we create the same query plan in all PG 14.X versions
@@ -802,16 +798,10 @@ SET enable_parallel_append = false;
 :explain
 SELECT sum(cpu) FROM f_sensor_data;
 
--- Encourage use of Index Scan
-
-SET enable_seqscan = false;
-SET enable_indexscan = true;
-SET min_parallel_index_scan_size = 0;
-SET min_parallel_table_scan_size = 0;
-
 CREATE INDEX ON f_sensor_data (time, sensor_id);
+
 :explain
-SELECT * FROM f_sensor_data WHERE sensor_id > 100;
+SELECT * FROM f_sensor_data WHERE sensor_id > 1000;
 
 RESET enable_parallel_append;
 
@@ -835,7 +825,7 @@ VACUUM ANALYZE f_sensor_data;
 SELECT sum(cpu) FROM f_sensor_data;
 
 :explain
-SELECT * FROM f_sensor_data WHERE sensor_id > 100;
+SELECT * FROM f_sensor_data WHERE sensor_id > 1000;
 
 
 -- Test non-partial paths below append are not executed multiple times
@@ -845,6 +835,7 @@ SELECT create_hypertable('ts_device_table', 'time', chunk_time_interval => 1000)
 INSERT INTO ts_device_table SELECT generate_series(0,999,1), 1, 100, 20;
 ALTER TABLE ts_device_table set(timescaledb.compress, timescaledb.compress_segmentby='location', timescaledb.compress_orderby='time');
 SELECT compress_chunk(i) AS chunk_name FROM show_chunks('ts_device_table') i \gset
+VACUUM ANALYZE ts_device_table;
 
 SELECT count(*) FROM ts_device_table;
 SELECT count(*) FROM :chunk_name;
@@ -1005,7 +996,7 @@ SET work_mem = '16MB';
 
 -- Compress three of the chunks
 SELECT compress_chunk(ch) FROM show_chunks('sensor_data_compressed') ch LIMIT 3;
-ANALYZE sensor_data_compressed;
+VACUUM ANALYZE sensor_data_compressed;
 
 SELECT * FROM sensor_data_compressed ORDER BY time DESC LIMIT 5;
 
@@ -1052,7 +1043,7 @@ RESET timescaledb.enable_decompression_sorted_merge;
 
 -- create another chunk
 INSERT INTO stattest SELECT '2021/02/20 01:00'::TIMESTAMPTZ + ('1 hour'::interval * v), 250 * v FROM generate_series(125,140) v;
-ANALYZE stattest;
+VACUUM ANALYZE stattest;
 SELECT count(*) from show_chunks('stattest');
 SELECT table_name INTO TEMPORARY temptable FROM _timescaledb_catalog.chunk WHERE hypertable_id = (SELECT id FROM _timescaledb_catalog.hypertable WHERE table_name = 'stattest') ORDER BY creation_time desc limit 1;
 SELECT table_name  as "STAT_CHUNK2_NAME" FROM temptable \gset

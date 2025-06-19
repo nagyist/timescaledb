@@ -882,7 +882,7 @@ tsl_process_continuous_agg_viewstmt(Node *node, const char *query_string, void *
 		}
 	}
 
-	if (!with_clause_options[CreateMaterializedViewFlagCompress].is_default)
+	if (!with_clause_options[CreateMaterializedViewFlagColumnstore].is_default)
 	{
 		ereport(ERROR,
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
@@ -951,7 +951,13 @@ tsl_process_continuous_agg_viewstmt(Node *node, const char *query_string, void *
 		refresh_window.end = ts_time_get_noend_or_max(refresh_window.type);
 
 		CaggRefreshContext context = { .callctx = CAGG_REFRESH_CREATION };
-		continuous_agg_refresh_internal(cagg, &refresh_window, context, true, true, false);
+		continuous_agg_refresh_internal(cagg,
+										&refresh_window,
+										context,
+										true,
+										true,
+										false,
+										true /* process_hypertable_invalidations */);
 	}
 
 	return DDL_DONE;
