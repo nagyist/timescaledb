@@ -214,6 +214,8 @@ lazy_build_hypercore_info_cache(Relation rel, bool create_chunk_constraints,
 {
 	Assert(OidIsValid(rel->rd_id) && (!ts_extension_is_loaded() || !ts_is_hypertable(rel->rd_id)));
 
+	PushActiveSnapshot(GetTransactionSnapshot());
+
 	const CompressionSettings *settings;
 	HypercoreInfo *hcinfo;
 	TupleDesc tupdesc = RelationGetDescr(rel);
@@ -257,8 +259,6 @@ lazy_build_hypercore_info_cache(Relation rel, bool create_chunk_constraints,
 
 		if (create_chunk_constraints)
 		{
-			ts_chunk_constraints_create(ht_compressed, c_chunk);
-			ts_trigger_create_all_on_chunk(c_chunk);
 			create_proxy_vacuum_index(rel, c_chunk->table_id);
 			RelationSize before_size = ts_relation_size_impl(RelationGetRelid(rel));
 			create_compression_relation_size_stats(chunk->fd.id,
@@ -327,6 +327,7 @@ lazy_build_hypercore_info_cache(Relation rel, bool create_chunk_constraints,
 			colsettings->cattnum_max = get_attnum(hcinfo->compressed_relid, max_attname);
 		}
 	}
+	PopActiveSnapshot();
 
 	return hcinfo;
 }
@@ -2171,7 +2172,6 @@ static Oid
 compress_and_swap_heap(Relation rel, Tuplesortstate *tuplesort, TransactionId *xid_cutoff,
 					   MultiXactId *multi_cutoff)
 {
-	TupleDesc tupdesc = RelationGetDescr(rel);
 	Oid old_compressed_relid = RelationGetHypercoreInfo(rel)->compressed_relid;
 	const CompressionSettings *settings = ts_compression_settings_get(RelationGetRelid(rel));
 	Relation old_compressed_rel = hypercore_open_compressed(rel, AccessExclusiveLock);
@@ -2198,11 +2198,7 @@ compress_and_swap_heap(Relation rel, Tuplesortstate *tuplesort, TransactionId *x
 
 	writer = bulk_writer_build(new_compressed_rel, HEAP_INSERT_FROZEN);
 	row_compressor.on_flush = on_compression_progress;
-	row_compressor_append_sorted_rows(&row_compressor,
-									  tuplesort,
-									  tupdesc,
-									  old_compressed_rel,
-									  &writer);
+	row_compressor_append_sorted_rows(&row_compressor, tuplesort, old_compressed_rel, &writer);
 	reltuples = row_compressor.num_compressed_rows;
 	relpages = RelationGetNumberOfBlocks(new_compressed_rel);
 	row_compressor_close(&row_compressor);
@@ -3766,16 +3762,11 @@ convert_to_hypercore_finish(Oid relid)
 	 * relcache invalidations. Previously there was sometimes a crash here
 	 * because the tuple sort state had a reference to a tuple descriptor in
 	 * the relcache. */
-#if (PG_VERSION_NUM >= 140001)
 	RelationCacheInvalidate(false);
-#else
-	RelationCacheInvalidate();
-#endif
 #endif
 
 	Chunk *chunk = ts_chunk_get_by_relid(conversionstate->relid, true);
 	Relation relation = table_open(conversionstate->relid, AccessShareLock);
-	TupleDesc tupdesc = RelationGetDescr(relation);
 
 	if (!chunk)
 		elog(ERROR, "could not find uncompressed chunk for relation %s", get_rel_name(relid));
@@ -3804,7 +3795,6 @@ convert_to_hypercore_finish(Oid relid)
 
 	row_compressor_append_sorted_rows(&row_compressor,
 									  conversionstate->tuplesortstate,
-									  tupdesc,
 									  compressed_rel,
 									  &writer);
 
