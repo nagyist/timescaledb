@@ -1308,7 +1308,11 @@ process_truncate(ProcessUtilityArgs *args)
 						 * Block direct TRUNCATE on frozen chunk.
 						 */
 						if (ts_chunk_is_frozen(chunk))
-							elog(ERROR, "cannot TRUNCATE frozen chunk \"%s\"", get_rel_name(relid));
+							ereport(ERROR,
+									(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+									 errmsg("cannot TRUNCATE frozen chunk \"%s\"",
+											get_rel_name(relid)),
+									 errhint("Unfreeze the chunk to TRUNCATE it.")));
 
 						Assert(ht != NULL);
 
@@ -3658,7 +3662,12 @@ process_cluster_start(ProcessUtilityArgs *args)
 			 * Since we keep OIDs between transactions, there is a potential
 			 * issue if an OID gets reassigned between two subtransactions
 			 */
+#if PG18_LT
 			cluster_rel(cim->chunkoid, cim->indexoid, get_cluster_options(stmt));
+#else
+			Relation rel = table_open(cim->chunkoid, AccessExclusiveLock);
+			cluster_rel(rel, cim->indexoid, get_cluster_options(stmt));
+#endif
 			PopActiveSnapshot();
 			CommitTransactionCommand();
 		}
@@ -3816,7 +3825,7 @@ process_create_table_end(Node *parsetree)
 											   NULL, /* associated_table_prefix */
 										   csi))
 		{
-			if (ts_cm_functions->compression_enable)
+			if (DatumGetBool(create_table_info.with_clauses[CreateTableFlagColumnstore].parsed))
 			{
 				Hypertable *ht = ts_hypertable_get_by_id(ht_id);
 				ts_cm_functions->compression_enable(ht, create_table_info.with_clauses);
@@ -4136,6 +4145,9 @@ process_set_access_method(AlterTableCmd *cmd, ProcessUtilityArgs *args)
 											DEFELEM_UNSPEC,
 											-1);
 
+		elog(WARNING,
+			 "the hypercore access method is marked as deprecated with the 2.21.0 release and will "
+			 "be fully removed in the 2.22.0 release.");
 		AlterTableCmd *cmd = makeNode(AlterTableCmd);
 		cmd->type = T_AlterTableCmd;
 		cmd->subtype = AT_SetRelOptions;
@@ -4955,7 +4967,7 @@ process_altertable_set_options(AlterTableCmd *cmd, Hypertable *ht)
 		ts_dimension_set_chunk_interval(dim, chunk_interval);
 	}
 
-	if (!parse_results[AlterTableFlagCompress].is_default ||
+	if (!parse_results[AlterTableFlagColumnstore].is_default ||
 		!parse_results[AlterTableFlagOrderBy].is_default ||
 		!parse_results[AlterTableFlagSegmentBy].is_default ||
 		!parse_results[AlterTableFlagCompressChunkTimeInterval].is_default)
@@ -4994,7 +5006,8 @@ process_viewstmt(ProcessUtilityArgs *args)
 	ts_with_clause_filter(stmt->options, &cagg_options, &pg_options);
 	if (cagg_options)
 		ereport(ERROR,
-				(errmsg("cannot create continuous aggregate with CREATE VIEW"),
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("cannot create continuous aggregate with CREATE VIEW"),
 				 errhint("Use CREATE MATERIALIZED VIEW to create a continuous aggregate.")));
 	return DDL_CONTINUE;
 }

@@ -35,6 +35,8 @@ typedef struct Chunk Chunk;
 typedef struct ChunkInsertState ChunkInsertState;
 typedef struct CopyChunkState CopyChunkState;
 typedef struct ModifyHypertableState ModifyHypertableState;
+typedef struct RowCompressor RowCompressor;
+typedef struct BulkWriter BulkWriter;
 
 typedef struct CrossModuleFunctions
 {
@@ -46,6 +48,10 @@ typedef struct CrossModuleFunctions
 	PGFunction policy_refresh_cagg_proc;
 	PGFunction policy_refresh_cagg_check;
 	PGFunction policy_refresh_cagg_remove;
+	PGFunction policy_process_hyper_inval_add;
+	PGFunction policy_process_hyper_inval_proc;
+	PGFunction policy_process_hyper_inval_check;
+	PGFunction policy_process_hyper_inval_remove;
 	PGFunction policy_reorder_add;
 	PGFunction policy_reorder_proc;
 	PGFunction policy_reorder_check;
@@ -117,6 +123,7 @@ typedef struct CrossModuleFunctions
 	PGFunction continuous_agg_get_bucket_function_info;
 	PGFunction continuous_agg_migrate_to_time_bucket;
 	PGFunction cagg_try_repair;
+	PGFunction continuous_agg_read_invalidation_record;
 
 	PGFunction compressed_data_send;
 	PGFunction compressed_data_recv;
@@ -130,13 +137,20 @@ typedef struct CrossModuleFunctions
 	PGFunction create_compressed_chunk;
 	PGFunction compress_chunk;
 	PGFunction decompress_chunk;
-	void (*decompress_batches_for_insert)(const ChunkInsertState *state, TupleTableSlot *slot);
+	void (*decompress_batches_for_insert)(ChunkInsertState *state, TupleTableSlot *slot);
+	void (*init_decompress_state_for_insert)(ChunkInsertState *state, TupleTableSlot *slot);
 	bool (*decompress_target_segments)(ModifyHypertableState *ht_state);
 	int (*hypercore_decompress_update_segment)(Relation relation, const ItemPointer ctid,
 											   TupleTableSlot *slot, Snapshot snapshot,
 											   ItemPointer new_tid);
 
 	void (*compression_enable)(Hypertable *ht, WithClauseResult *with_clause_options);
+	RowCompressor *(*compressor_init)(Relation in_rel, BulkWriter **bulk_writer, bool sort);
+	void (*compressor_add_slot)(RowCompressor *compressor, BulkWriter *bulk_writer,
+								TupleTableSlot *slot);
+	void (*compressor_flush)(RowCompressor *compressor, BulkWriter *bulk_writer);
+	void (*compressor_free)(RowCompressor *compressor, BulkWriter *bulk_writer);
+	Chunk *(*compression_chunk_create)(Hypertable *ht, Chunk *src_chunk);
 
 	/* The compression functions below are not installed in SQL as part of create extension;
 	 *  They are installed and tested during testing scripts. They are exposed in cross-module
@@ -172,6 +186,9 @@ typedef struct CrossModuleFunctions
 	void (*preprocess_query_tsl)(Query *parse, int *cursor_opts);
 	PGFunction merge_chunks;
 	PGFunction split_chunk;
+
+	PGFunction detach_chunk;
+	PGFunction attach_chunk;
 } CrossModuleFunctions;
 
 extern TSDLLEXPORT CrossModuleFunctions *ts_cm_functions;

@@ -381,16 +381,23 @@ ts_internal_to_time_int64(int64 value, Oid type)
 }
 
 TSDLLEXPORT char *
-ts_internal_to_time_string(int64 value, Oid type)
+ts_datum_to_string(Datum value, Oid type)
 {
-	Datum time_datum = ts_internal_to_time_value(value, type);
 	Oid typoutputfunc;
 	bool typIsVarlena;
 	FmgrInfo typoutputinfo;
 
 	getTypeOutputInfo(type, &typoutputfunc, &typIsVarlena);
 	fmgr_info(typoutputfunc, &typoutputinfo);
-	return OutputFunctionCall(&typoutputinfo, time_datum);
+	return OutputFunctionCall(&typoutputinfo, value);
+}
+
+TSDLLEXPORT char *
+ts_internal_to_time_string(int64 value, Oid type)
+{
+	Datum time_datum = ts_internal_to_time_value(value, type);
+
+	return ts_datum_to_string(time_datum, type);
 }
 
 TS_FUNCTION_INFO_V1(ts_pg_unix_microseconds_to_interval);
@@ -1971,4 +1978,25 @@ ts_errdata_to_jsonb(ErrorData *edata, Name proc_schema, Name proc_name)
 	/* we add the schema qualified name here as well*/
 	JsonbValue *result = pushJsonbValue(&parse_state, WJB_END_OBJECT, NULL);
 	return JsonbValueToJsonb(result);
+}
+
+char *
+ts_get_attr_expr(Relation rel, AttrNumber attno)
+{
+	TupleConstr *constr = rel->rd_att->constr;
+	char *expr = NULL;
+
+	for (int i = 0; i < constr->num_defval; i++)
+	{
+		if (constr->defval[i].adnum == attno)
+		{
+			expr = TextDatumGetCString(
+				DirectFunctionCall2(pg_get_expr,
+									CStringGetTextDatum(constr->defval[i].adbin),
+									ObjectIdGetDatum(RelationGetRelid(rel))));
+			break;
+		}
+	}
+
+	return expr;
 }
