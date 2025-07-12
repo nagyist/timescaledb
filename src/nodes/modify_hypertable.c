@@ -8,9 +8,15 @@
 #include <nodes/execnodes.h>
 #include <nodes/makefuncs.h>
 
+#include "compat/compat.h"
+#include "chunk_tuple_routing.h"
 #include "nodes/chunk_append/chunk_append.h"
 #include "nodes/chunk_dispatch/chunk_dispatch.h"
 #include "nodes/modify_hypertable.h"
+
+#if PG18_GE
+#include <commands/explain_format.h>
+#endif
 
 static ChunkDispatchState *
 get_chunk_dispatch_state(PlanState *substate)
@@ -156,10 +162,10 @@ modify_hypertable_explain(CustomScanState *node, List *ancestors, ExplainState *
 	{
 		ChunkDispatchState *cds = get_chunk_dispatch_state(outerPlanState(mtstate));
 
-		state->batches_deleted += cds->batches_deleted;
-		state->batches_filtered += cds->batches_filtered;
-		state->batches_decompressed += cds->batches_decompressed;
-		state->tuples_decompressed += cds->tuples_decompressed;
+		state->batches_deleted += cds->dispatch->counters->batches_deleted;
+		state->batches_filtered += cds->dispatch->counters->batches_filtered;
+		state->batches_decompressed += cds->dispatch->counters->batches_decompressed;
+		state->tuples_decompressed += cds->dispatch->counters->tuples_decompressed;
 	}
 	if (state->batches_filtered > 0)
 		ExplainPropertyInteger("Batches filtered", NULL, state->batches_filtered, es);
@@ -390,13 +396,10 @@ ts_modify_hypertable_path_create(PlannerInfo *root, ModifyTablePath *mtpath, Hyp
 	Path *path = &mtpath->path;
 	Cache *hcache = ts_hypertable_cache_pin();
 	ModifyHypertablePath *hmpath;
-	int i = 0;
-
-	Index rti = mtpath->nominalRelation;
 
 	if (mtpath->operation == CMD_INSERT || mtpath->operation == CMD_MERGE)
 	{
-		mtpath->subpath = ts_chunk_dispatch_path_create(root, mtpath, rti, i);
+		mtpath->subpath = ts_chunk_dispatch_path_create(root, mtpath);
 	}
 
 	hmpath = palloc0(sizeof(ModifyHypertablePath));

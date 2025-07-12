@@ -129,7 +129,7 @@ cagg_alter_compression(ContinuousAgg *agg, Hypertable *mat_ht, List *compress_de
 	Assert(mat_ht != NULL);
 	WithClauseResult *with_clause_options = ts_alter_table_with_clause_parse(compress_defelems);
 
-	if (with_clause_options[AlterTableFlagCompress].parsed)
+	if (with_clause_options[AlterTableFlagColumnstore].parsed)
 	{
 		List *default_compress_defelems = cagg_get_compression_params(agg, mat_ht);
 		WithClauseResult *default_with_clause_options =
@@ -206,10 +206,14 @@ continuous_agg_update_options(ContinuousAgg *agg, WithClauseResult *with_clause_
 	}
 	if (!with_clause_options[CreateMaterializedViewFlagCreateGroupIndexes].is_default)
 	{
-		elog(ERROR, "cannot alter create_group_indexes option for continuous aggregates");
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("cannot alter create_group_indexes option for continuous aggregates")));
 	}
 	if (!with_clause_options[CreateMaterializedViewFlagFinalized].is_default)
 	{
-		elog(ERROR, "cannot alter finalized option for continuous aggregates");
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("cannot alter finalized option for continuous aggregates")));
 	}
 }

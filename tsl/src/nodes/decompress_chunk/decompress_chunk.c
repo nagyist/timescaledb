@@ -64,10 +64,8 @@ static void create_compressed_scan_paths(PlannerInfo *root, RelOptInfo *compress
 										 const CompressionInfo *compression_info,
 										 const SortInfo *sort_info);
 
-static DecompressChunkPath *decompress_chunk_path_create(PlannerInfo *root,
-														 const CompressionInfo *info,
-														 int parallel_workers,
-														 Path *compressed_path);
+static DecompressChunkPath *
+decompress_chunk_path_create(PlannerInfo *root, const CompressionInfo *info, Path *compressed_path);
 
 static void decompress_chunk_add_plannerinfo(PlannerInfo *root, CompressionInfo *info,
 											 const Chunk *chunk, RelOptInfo *chunk_rel,
@@ -91,7 +89,7 @@ append_ec_for_seqnum(PlannerInfo *root, const CompressionInfo *info, const SortI
 	MemoryContext oldcontext = MemoryContextSwitchTo(root->planner_cxt);
 
 	Oid opfamily, opcintype, equality_op;
-	int16 strategy;
+	CompareType strategy;
 	List *opfamilies;
 	EquivalenceClass *newec = makeNode(EquivalenceClass);
 	EquivalenceMember *em = makeNode(EquivalenceMember);
@@ -131,7 +129,7 @@ append_ec_for_seqnum(PlannerInfo *root, const CompressionInfo *info, const SortI
 	newec->ec_collation = 0;
 	newec->ec_members = list_make1(em);
 	newec->ec_sources = NIL;
-	newec->ec_derives = NIL;
+	newec->ec_derives_list = NIL;
 	newec->ec_relids = bms_make_singleton(info->compressed_rel->relid);
 	newec->ec_has_const = false;
 	newec->ec_has_volatile = false;
@@ -169,7 +167,7 @@ append_ec_for_metadata_col(PlannerInfo *root, const CompressionInfo *info, Var *
 	ec->ec_collation = pk->pk_eclass->ec_collation;
 	ec->ec_members = list_make1(em);
 	ec->ec_sources = list_copy(pk->pk_eclass->ec_sources);
-	ec->ec_derives = list_copy(pk->pk_eclass->ec_derives);
+	ec->ec_derives_list = list_copy(pk->pk_eclass->ec_derives_list);
 	ec->ec_relids = bms_make_singleton(info->compressed_rel->relid);
 	ec->ec_has_const = pk->pk_eclass->ec_has_const;
 	ec->ec_has_volatile = pk->pk_eclass->ec_has_volatile;
@@ -278,7 +276,7 @@ build_compressed_scan_pathkeys(const SortInfo *sort_info, PlannerInfo *root, Lis
 
 			/* Find the operator in pg_amop --- failure shouldn't happen. */
 			Oid opfamily, opcintype;
-			int16 strategy;
+			CompareType strategy;
 			if (!get_ordering_op_properties(sortop, &opfamily, &opcintype, &strategy))
 				elog(ERROR, "operator %u is not a valid ordering operator", sortop);
 
@@ -316,7 +314,7 @@ build_compressed_scan_pathkeys(const SortInfo *sort_info, PlannerInfo *root, Lis
 					ts_array_get_element_bool(info->settings->fd.orderby_nullsfirst, orderby_index);
 
 				bool nulls_first;
-				int16 strategy;
+				CompareType strategy;
 
 				if (sort_info->reverse)
 				{
@@ -362,6 +360,8 @@ build_compressed_scan_pathkeys(const SortInfo *sort_info, PlannerInfo *root, Lis
 DecompressChunkPath *
 copy_decompress_chunk_path(DecompressChunkPath *src)
 {
+	Assert(ts_is_decompress_chunk_path(&src->custom_path.path));
+
 	DecompressChunkPath *dst = palloc(sizeof(DecompressChunkPath));
 	memcpy(dst, src, sizeof(DecompressChunkPath));
 
@@ -545,6 +545,9 @@ cost_batch_sorted_merge(PlannerInfo *root, const CompressionInfo *compression_in
 	cost_sort(&sort_path,
 			  root,
 			  dcpath->required_compressed_pathkeys,
+#if PG18_GE
+			  compressed_path->disabled_nodes,
+#endif
 			  compressed_path->total_cost,
 			  compressed_path->rows,
 			  compressed_path->pathtarget->width,
@@ -960,8 +963,10 @@ ts_decompress_chunk_generate_paths(PlannerInfo *root, RelOptInfo *chunk_rel, con
 				continue;
 		}
 
+		Assert(compressed_path->parallel_workers == 0);
 		Path *chunk_path =
-			(Path *) decompress_chunk_path_create(root, compression_info, 0, compressed_path);
+			(Path *) decompress_chunk_path_create(root, compression_info, compressed_path);
+		Assert(chunk_path->parallel_workers == 0);
 
 		/*
 		 * Create a path for the batch sorted merge optimization. This optimization performs a
@@ -1020,6 +1025,9 @@ ts_decompress_chunk_generate_paths(PlannerInfo *root, RelOptInfo *chunk_rel, con
 				cost_sort(&sort_path,
 						  root,
 						  sort_info.required_compressed_pathkeys,
+#if PG18_GE
+						  compressed_path->disabled_nodes,
+#endif
 						  compressed_path->total_cost,
 						  compressed_path->rows,
 						  compressed_path->pathtarget->width,
@@ -1144,10 +1152,11 @@ ts_decompress_chunk_generate_paths(PlannerInfo *root, RelOptInfo *chunk_rel, con
 			 * If this is a partially compressed chunk we have to combine data
 			 * from compressed and uncompressed chunk.
 			 */
-			path = (Path *) decompress_chunk_path_create(root,
-														 compression_info,
-														 compressed_path->parallel_workers,
-														 compressed_path);
+			Assert(compressed_path->parallel_workers > 0);
+			Assert(compressed_path->parallel_safe);
+			path = (Path *) decompress_chunk_path_create(root, compression_info, compressed_path);
+			Assert(path->parallel_workers > 0);
+			Assert(path->parallel_safe);
 
 			if (consider_partial)
 			{
@@ -1883,8 +1892,7 @@ decompress_chunk_add_plannerinfo(PlannerInfo *root, CompressionInfo *info, const
 }
 
 static DecompressChunkPath *
-decompress_chunk_path_create(PlannerInfo *root, const CompressionInfo *info, int parallel_workers,
-							 Path *compressed_path)
+decompress_chunk_path_create(PlannerInfo *root, const CompressionInfo *info, Path *compressed_path)
 {
 	DecompressChunkPath *path;
 
@@ -1919,13 +1927,16 @@ decompress_chunk_path_create(PlannerInfo *root, const CompressionInfo *info, int
 	path->custom_path.methods = &decompress_chunk_path_methods;
 	path->batch_sorted_merge = false;
 
-	/* To prevent a non-parallel path with this node appearing
-	 * in a parallel plan we only set parallel_safe to true
-	 * when parallel_workers is greater than 0 which is only
-	 * the case when creating partial paths. */
-	path->custom_path.path.parallel_safe = parallel_workers > 0;
-	path->custom_path.path.parallel_workers = parallel_workers;
+	/*
+	 * DecompressChunk doesn't manage any parallelism itself.
+	 */
 	path->custom_path.path.parallel_aware = false;
+
+	/*
+	 * It can be applied per parallel worker, if its underlying scan is parallel.
+	 */
+	path->custom_path.path.parallel_safe = compressed_path->parallel_safe;
+	path->custom_path.path.parallel_workers = compressed_path->parallel_workers;
 
 	path->custom_path.custom_paths = list_make1(compressed_path);
 	path->reverse = false;
@@ -1977,18 +1988,6 @@ create_compressed_scan_paths(PlannerInfo *root, RelOptInfo *compressed_rel,
 		}
 	}
 
-	/*
-	 * We set enable_bitmapscan to false here to ensure any paths with bitmapscan do not
-	 * displace other paths. Note that setting the postgres GUC will not actually disable
-	 * the bitmapscan path creation but will instead create them with very high cost.
-	 * If bitmapscan were the dominant path after postgres planning we could end up
-	 * in a situation where we have no valid plan for this relation because we remove
-	 * bitmapscan paths from the pathlist.
-	 */
-
-	bool old_bitmapscan = enable_bitmapscan;
-	enable_bitmapscan = false;
-
 	if (sort_info->use_compressed_sort)
 	{
 		/*
@@ -2032,8 +2031,6 @@ create_compressed_scan_paths(PlannerInfo *root, RelOptInfo *compressed_rel,
 		check_index_predicates(root, compressed_rel);
 		create_index_paths(root, compressed_rel);
 	}
-
-	enable_bitmapscan = old_bitmapscan;
 }
 
 /*
@@ -2200,11 +2197,11 @@ match_pathkeys_to_compression_orderby(List *pathkeys, List *chunk_em_exprs,
 									  orderby_index);
 
 		/*
-		 * pk_strategy is either BTLessStrategyNumber (for ASC) or
-		 * BTGreaterStrategyNumber (for DESC)
+		 * In PG18+: pk_cmptype is either COMPARE_LT (for ASC) or COMPARE_GT (for DESC)
+		 * For previous PG versions we have compatibility macros to make these new names available.
 		 */
 		bool this_pathkey_reverse = false;
-		if (pk->pk_strategy == BTLessStrategyNumber)
+		if (pk->pk_cmptype == COMPARE_LT)
 		{
 			if (!orderby_desc && orderby_nullsfirst == pk->pk_nulls_first)
 			{
@@ -2219,7 +2216,7 @@ match_pathkeys_to_compression_orderby(List *pathkeys, List *chunk_em_exprs,
 				return false;
 			}
 		}
-		else if (pk->pk_strategy == BTGreaterStrategyNumber)
+		else if (pk->pk_cmptype == COMPARE_GT)
 		{
 			if (orderby_desc && orderby_nullsfirst == pk->pk_nulls_first)
 			{

@@ -34,7 +34,7 @@ static const WithClauseDefinition continuous_aggregate_with_clause_def[] = {
         .type_id = BOOLOID,
         .default_val = (Datum)true,
     },
-    [CreateMaterializedViewFlagCompress] = {
+    [CreateMaterializedViewFlagColumnstore] = {
         .arg_names = {"columnstore", "enable_columnstore", "compress", NULL},
         .type_id = BOOLOID,
     },
@@ -59,6 +59,11 @@ static const WithClauseDefinition continuous_aggregate_with_clause_def[] = {
         .arg_names = {"compress_chunk_interval", "compress_chunk_time_interval", NULL},
          .type_id = INTERVALOID,
     },
+	[CreateMaterializedViewFlagInvalidateUsing] = {
+        .arg_names = {"invalidate_using", NULL},
+		.type_id = TEXTOID,
+		.default_val = (Datum) 0,
+	},
 };
 
 WithClauseResult *
@@ -82,8 +87,8 @@ ts_continuous_agg_get_compression_defelems(const WithClauseResult *with_clauses)
 			case AlterTableFlagChunkTimeInterval:
 				continue;
 				break;
-			case AlterTableFlagCompress:
-				option_index = CreateMaterializedViewFlagCompress;
+			case AlterTableFlagColumnstore:
+				option_index = CreateMaterializedViewFlagColumnstore;
 				break;
 			case AlterTableFlagSegmentBy:
 				option_index = CreateMaterializedViewFlagSegmentBy;

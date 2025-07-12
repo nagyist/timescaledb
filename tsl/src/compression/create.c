@@ -221,18 +221,6 @@ should_create_bloom_sparse_index(Form_pg_attribute attr, TypeCacheEntry *type, O
 		return false;
 	}
 
-	/*
-	 * Bloom filter pushdown is not implemented for TAM at the moment, so keep
-	 * the old behavior with minmax sparse indexes. This check is actually not
-	 * enough, because the compressed chunk table is created when the
-	 * uncompressed chunk table is converted to TAM, and at this time it still
-	 * has the normal heap access method.
-	 */
-	if (ts_is_hypercore_am(ts_get_rel_am(src_reloid)))
-	{
-		return false;
-	}
-
 	return true;
 }
 
@@ -310,9 +298,10 @@ build_columndefs(CompressionSettings *settings, Oid src_reloid)
 		if (strncmp(NameStr(attr->attname),
 					COMPRESSION_COLUMN_METADATA_PREFIX,
 					strlen(COMPRESSION_COLUMN_METADATA_PREFIX)) == 0)
-			elog(ERROR,
-				 "cannot compress tables with reserved column prefix '%s'",
-				 COMPRESSION_COLUMN_METADATA_PREFIX);
+			ereport(ERROR,
+					(errcode(ERRCODE_RESERVED_NAME),
+					 errmsg("cannot convert tables with reserved column prefix '%s'",
+							COMPRESSION_COLUMN_METADATA_PREFIX)));
 
 		bool is_segmentby = ts_array_is_member(segmentby, NameStr(attr->attname));
 		if (is_segmentby)
@@ -466,9 +455,10 @@ build_columndef_singlecolumn(const char *colname, Oid typid)
 	if (strncmp(colname,
 				COMPRESSION_COLUMN_METADATA_PREFIX,
 				strlen(COMPRESSION_COLUMN_METADATA_PREFIX)) == 0)
-		elog(ERROR,
-			 "cannot compress tables with reserved column prefix '%s'",
-			 COMPRESSION_COLUMN_METADATA_PREFIX);
+		ereport(ERROR,
+				(errcode(ERRCODE_RESERVED_NAME),
+				 errmsg("cannot convert tables with reserved column prefix '%s'",
+						COMPRESSION_COLUMN_METADATA_PREFIX)));
 
 	return makeColumnDef(colname, compresseddata_oid, -1 /*typmod*/, 0 /*collation*/);
 }
@@ -478,8 +468,6 @@ build_columndef_singlecolumn(const char *colname, Oid typid)
  *
  * If table_id is InvalidOid, create a new table.
  *
- * Constraints and triggers are not created on the PG chunk table.
- * Caller is expected to do this explicitly.
  */
 Chunk *
 create_compress_chunk(Hypertable *compress_ht, Chunk *src_chunk, Oid table_id)
@@ -492,16 +480,14 @@ create_compress_chunk(Hypertable *compress_ht, Chunk *src_chunk, Oid table_id)
 
 	Assert(compress_ht->space->num_dimensions == 0);
 
-	/* Create a new catalog entry for chunk based on the hypercube */
+	/* Create a new catalog entry for chunk based on uncompressed chunk */
 	ts_catalog_database_info_become_owner(ts_catalog_database_info_get(), &sec_ctx);
 	compress_chunk =
 		ts_chunk_create_base(ts_catalog_table_next_seq_id(catalog, CHUNK), 0, RELKIND_RELATION);
 	ts_catalog_restore_user(&sec_ctx);
 
 	compress_chunk->fd.hypertable_id = compress_ht->fd.id;
-	compress_chunk->cube = src_chunk->cube;
 	compress_chunk->hypertable_relid = compress_ht->main_table_relid;
-	compress_chunk->constraints = ts_chunk_constraints_alloc(1, CurrentMemoryContext);
 	namestrcpy(&compress_chunk->fd.schema_name, INTERNAL_SCHEMA_NAME);
 
 	if (OidIsValid(table_id))
@@ -531,14 +517,6 @@ create_compress_chunk(Hypertable *compress_ht, Chunk *src_chunk, Oid table_id)
 
 	/* Insert chunk */
 	ts_chunk_insert_lock(compress_chunk, RowExclusiveLock);
-
-	/* only add inheritable constraints. no dimension constraints */
-	ts_chunk_constraints_add_inheritable_constraints(compress_chunk->constraints,
-													 compress_chunk->fd.id,
-													 compress_chunk->relkind,
-													 compress_chunk->hypertable_relid);
-
-	ts_chunk_constraints_insert_metadata(compress_chunk->constraints);
 
 	/* Create the actual table relation for the chunk
 	 * Note that we have to pick the tablespace here as the compressed ht doesn't have dimensions
@@ -892,8 +870,8 @@ bool
 tsl_process_compress_table(Hypertable *ht, WithClauseResult *with_clause_options)
 {
 	int32 compress_htid;
-	bool compress_disable = !with_clause_options[AlterTableFlagCompress].is_default &&
-							!DatumGetBool(with_clause_options[AlterTableFlagCompress].parsed);
+	bool compress_disable = !with_clause_options[AlterTableFlagColumnstore].is_default &&
+							!DatumGetBool(with_clause_options[AlterTableFlagColumnstore].parsed);
 	CompressionSettings *settings;
 
 	ts_feature_flag_check(FEATURE_HYPERTABLE_COMPRESSION);
@@ -1006,9 +984,10 @@ validate_hypertable_for_compression(Hypertable *ht)
 		if (strncmp(NameStr(attr->attname),
 					COMPRESSION_COLUMN_METADATA_PREFIX,
 					strlen(COMPRESSION_COLUMN_METADATA_PREFIX)) == 0)
-			elog(ERROR,
-				 "cannot convert tables with reserved column prefix '%s' to columnstore",
-				 COMPRESSION_COLUMN_METADATA_PREFIX);
+			ereport(ERROR,
+					(errcode(ERRCODE_RESERVED_NAME),
+					 errmsg("cannot convert tables with reserved column prefix '%s' to columnstore",
+							COMPRESSION_COLUMN_METADATA_PREFIX)));
 	}
 
 	if (row_size > MaxHeapTupleSize)
@@ -1044,20 +1023,16 @@ validate_hypertable_for_compression(Hypertable *ht)
 		Form_pg_trigger trigrec = (Form_pg_trigger) GETSTRUCT(tuple);
 
 		/*
-		 * We currently cannot support transition tables for DELETE triggers
-		 * on compressed tables that are not using hypercore table access
-		 * method since deleting a complete segment will not build a
+		 * We currently don't support transition tables for DELETE triggers
+		 * on compressed tables because deleting a complete segment will not build a
 		 * transition table for the delete.
 		 */
 		fastgetattr(tuple, Anum_pg_trigger_tgoldtable, pg_trigger->rd_att, &oldtable_isnull);
 		if (!oldtable_isnull && !TRIGGER_FOR_ROW(trigrec->tgtype) &&
-			TRIGGER_FOR_DELETE(trigrec->tgtype) && !ts_is_hypercore_am(ht->amoid))
+			TRIGGER_FOR_DELETE(trigrec->tgtype))
 			ereport(ERROR,
 					errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-					errmsg("DELETE triggers with transition tables not supported"),
-					errdetail(
-						"Compressed hypertables not using \"hypercore\" access method are not "
-						"supported if the trigger use transition tables."));
+					errmsg("DELETE triggers with transition tables not supported"));
 	}
 
 	systable_endscan(scan);
@@ -1430,9 +1405,10 @@ tsl_process_compress_table_rename_column(Hypertable *ht, const RenameStmt *stmt)
 	if (strncmp(stmt->newname,
 				COMPRESSION_COLUMN_METADATA_PREFIX,
 				strlen(COMPRESSION_COLUMN_METADATA_PREFIX)) == 0)
-		elog(ERROR,
-			 "cannot convert tables with reserved column prefix '%s' to columnstore",
-			 COMPRESSION_COLUMN_METADATA_PREFIX);
+		ereport(ERROR,
+				(errcode(ERRCODE_RESERVED_NAME),
+				 errmsg("cannot convert tables with reserved column prefix '%s' to columnstore",
+						COMPRESSION_COLUMN_METADATA_PREFIX)));
 
 	if (!TS_HYPERTABLE_HAS_COMPRESSION_TABLE(ht))
 	{
